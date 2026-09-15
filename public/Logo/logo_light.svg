@@ -1,0 +1,31 @@
+<svg width="420" height="120" viewBox="0 0 420 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="scorekindGrad" x1="0" y1="0" x2="420" y2="120" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F766E"/>
+      <stop offset="1" stop-color="#22C55E"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="420" height="120" rx="24"/>
+
+  <!-- Decorative icon -->
+  <g transform="translate(24,24)">
+    <rect x="0" y="0" width="72" height="72" rx="20" fill="url(#scorekindGrad)"/>
+    <path d="M18 38C18 30.268 24.268 24 32 24C36.454 24 40.423 26.08 43 29.317C45.577 26.08 49.546 24 54 24C61.732 24 68 30.268 68 38C68 52 54.5 60.5 43 68C31.5 60.5 18 52 18 38Z" fill="white" fill-opacity="0.18"/>
+    <path d="M23 38L32 47L50 29" stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- Brand text -->
+  <text x="115" y="56" font-family="Inter, Poppins, Arial, sans-serif" font-size="38" font-weight="700" fill="#0F172A">
+    Score
+  </text>
+  <text x="231" y="56" font-family="Inter, Poppins, Arial, sans-serif" font-size="38" font-weight="700" fill="url(#scorekindGrad)">
+    Kind
+  </text>
+
+  <!-- Tagline -->
+  <text x="117" y="84" font-family="Inter, Poppins, Arial, sans-serif" font-size="15" font-weight="500" fill="#475569" letter-spacing="0.4">
+    Score. Win. Give Back.
+  </text>
+</svg>

@@ -2,7 +2,29 @@
 -- SCOREKIND INITIAL DATABASE SCHEMA & ROW LEVEL SECURITY
 -- ==============================================================================
 
--- 1. Helper function to check if current user is admin (SECURITY DEFINER to avoid RLS recursion)
+-- 1. Generic updated_at trigger function
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+-- 2. PROFILES TABLE (Must precede functions that reference public.profiles)
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name TEXT,
+  email TEXT,
+  avatar_url TEXT NULL,
+  role TEXT NOT NULL DEFAULT 'subscriber' CHECK (role IN ('subscriber', 'admin')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 3. Helper function to check if current user is admin (SECURITY DEFINER to avoid RLS recursion)
 CREATE OR REPLACE FUNCTION public.is_admin()
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -16,29 +38,7 @@ AS $$
   );
 $$;
 
--- 2. Generic updated_at trigger function
-CREATE OR REPLACE FUNCTION public.set_updated_at()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$;
-
--- 3. PROFILES TABLE
-CREATE TABLE IF NOT EXISTS public.profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  full_name TEXT,
-  email TEXT,
-  avatar_url TEXT NULL,
-  role TEXT NOT NULL DEFAULT 'subscriber' CHECK (role IN ('subscriber', 'admin')),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Trigger to prevent self-promotion or role tampering by subscribers.
+-- 4. Trigger to prevent self-promotion or role tampering by subscribers.
 -- Permits trusted server/service-role operations, database superusers, or established admins.
 CREATE OR REPLACE FUNCTION public.check_role_update()
 RETURNS TRIGGER
@@ -95,7 +95,7 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
 
--- 4. SUBSCRIPTIONS TABLE
+-- 5. SUBSCRIPTIONS TABLE
 CREATE TABLE IF NOT EXISTS public.subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -116,7 +116,7 @@ CREATE TRIGGER tr_subscriptions_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION public.set_updated_at();
 
--- 5. SCORES TABLE
+-- 6. SCORES TABLE
 CREATE TABLE IF NOT EXISTS public.scores (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -133,7 +133,7 @@ CREATE TRIGGER tr_scores_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION public.set_updated_at();
 
--- 6. CHARITIES TABLE
+-- 7. CHARITIES TABLE
 CREATE TABLE IF NOT EXISTS public.charities (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
@@ -154,7 +154,7 @@ CREATE TRIGGER tr_charities_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION public.set_updated_at();
 
--- 7. CHARITY PREFERENCES TABLE
+-- 8. CHARITY PREFERENCES TABLE
 CREATE TABLE IF NOT EXISTS public.charity_preferences (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL UNIQUE REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -170,7 +170,7 @@ CREATE TRIGGER tr_charity_preferences_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION public.set_updated_at();
 
--- 8. CHARITY CONTRIBUTIONS TABLE
+-- 9. CHARITY CONTRIBUTIONS TABLE
 CREATE TABLE IF NOT EXISTS public.charity_contributions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS public.charity_contributions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 9. DRAWS TABLE
+-- 10. DRAWS TABLE
 CREATE TABLE IF NOT EXISTS public.draws (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draw_date DATE NOT NULL,
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS public.draws (
   published_at TIMESTAMPTZ NULL
 );
 
--- 10. DRAW ENTRIES TABLE (Immutable Historical Snapshot)
+-- 11. DRAW ENTRIES TABLE (Immutable Historical Snapshot)
 CREATE TABLE IF NOT EXISTS public.draw_entries (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draw_id UUID NOT NULL REFERENCES public.draws(id) ON DELETE CASCADE,
@@ -210,7 +210,7 @@ CREATE TABLE IF NOT EXISTS public.draw_entries (
   CONSTRAINT draw_entries_draw_user_unique UNIQUE (draw_id, user_id)
 );
 
--- 11. WINNERS TABLE
+-- 12. WINNERS TABLE
 CREATE TABLE IF NOT EXISTS public.winners (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draw_id UUID NOT NULL REFERENCES public.draws(id) ON DELETE CASCADE,
@@ -226,7 +226,7 @@ CREATE TABLE IF NOT EXISTS public.winners (
   )
 );
 
--- 12. WINNER VERIFICATIONS TABLE
+-- 13. WINNER VERIFICATIONS TABLE
 CREATE TABLE IF NOT EXISTS public.winner_verifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   winner_id UUID NOT NULL UNIQUE REFERENCES public.winners(id) ON DELETE CASCADE,
@@ -238,7 +238,7 @@ CREATE TABLE IF NOT EXISTS public.winner_verifications (
   reviewed_at TIMESTAMPTZ NULL
 );
 
--- 13. PAYOUTS TABLE
+-- 14. PAYOUTS TABLE
 CREATE TABLE IF NOT EXISTS public.payouts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   winner_id UUID NOT NULL REFERENCES public.winners(id) ON DELETE CASCADE,

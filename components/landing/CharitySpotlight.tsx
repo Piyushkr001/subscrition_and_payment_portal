@@ -1,8 +1,8 @@
 import Link from "next/link"
-import { ArrowUpRight, Compass, Heart, Leaf, Shield, Sparkles, Trophy, Users } from "lucide-react"
+import { ArrowUpRight, Compass, Leaf, Shield, Sparkles, Trophy } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 
 export function CharitySpotlight() {
   const causes = [

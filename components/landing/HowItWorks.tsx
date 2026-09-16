@@ -1,5 +1,5 @@
 import { CheckCircle, CreditCard, HeartHandshake, ListOrdered, Sparkles, Trophy } from "lucide-react"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 
 export function HowItWorks() {

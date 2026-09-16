@@ -1,9 +1,17 @@
+"use client"
+
 import Image from "next/image"
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { HeartHandshake, ShieldCheck } from "lucide-react"
 
 export function Footer() {
+  const pathname = usePathname()
   const currentYear = new Date().getFullYear()
+
+  if (pathname?.startsWith("/dashboard") || pathname?.startsWith("/admin")) {
+    return null
+  }
 
   const platformLinks = [
     { title: "How It Works", href: "/#how-it-works" },

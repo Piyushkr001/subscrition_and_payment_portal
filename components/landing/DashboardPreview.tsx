@@ -1,7 +1,5 @@
-import { Award, Calendar, CheckCircle2, DollarSign, HeartHandshake, History, LayoutDashboard, Sparkles, TrendingUp, Trophy, UserCheck } from "lucide-react"
+import { CheckCircle2, HeartHandshake, LayoutDashboard, TrendingUp, Trophy } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { Card } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
 
 export function DashboardPreview() {
   const memberScores = [

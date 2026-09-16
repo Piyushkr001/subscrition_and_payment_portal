@@ -1,6 +1,6 @@
-import { Calendar, CheckCircle2, Edit3, HelpCircle, History, RefreshCw, ShieldCheck } from "lucide-react"
+import { Calendar, CheckCircle2, Edit3, History, RefreshCw, ShieldCheck } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
 
 export function ScoreExperience() {

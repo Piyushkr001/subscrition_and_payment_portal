@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Exo_2, Geist, Geist_Mono } from "next/font/google";
+import { Exo_2 } from "next/font/google";
 import "./globals.css";
 import Navbar from "./_shared/Navbar";
 import Footer from "./_shared/Footer";

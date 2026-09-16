@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ArrowRight, CheckCircle2, HeartHandshake, Percent, ShieldCheck, Sparkles, Users } from "lucide-react"
+import { ArrowRight, CheckCircle2, HeartHandshake, ShieldCheck, Users } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"

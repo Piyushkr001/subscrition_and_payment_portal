@@ -1,4 +1,4 @@
-import { Award, CheckCircle2, HeartHandshake, LayoutDashboard, ShieldCheck, Sparkles } from "lucide-react"
+import { Award, HeartHandshake, LayoutDashboard, ShieldCheck, Sparkles } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 

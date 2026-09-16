@@ -3,7 +3,7 @@
 import Image from "next/image"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   HeartHandshake,
   Menu,
@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/sheet"
 import { ModeToggle } from "./ModeToggle"
 import { cn } from "cn"
+import { createClient } from "@/lib/supabase/client"
+import type { User } from "@supabase/supabase-js"
 
 const navLinks = [
   {
@@ -52,7 +54,29 @@ const navLinks = [
 
 function Navbar() {
   const [open, setOpen] = useState(false)
+  const [user, setUser] = useState<User | null>(null)
   const pathname = usePathname()
+
+  useEffect(() => {
+    const supabase = createClient()
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  if (pathname?.startsWith("/dashboard") || pathname?.startsWith("/admin")) {
+    return null
+  }
 
   const isActive = (url: string) => {
     if (url === "/") {
@@ -133,26 +157,38 @@ function Navbar() {
         <div className="hidden items-center gap-2 lg:flex">
           <ModeToggle />
 
-          <Button
-            variant="ghost"
-            render={<Link href="/login" />}
-            className="rounded-full px-5"
-          >
-            Sign In
-          </Button>
+          {user ? (
+            <Button
+              render={<Link href="/dashboard" />}
+              className="rounded-full px-6 shadow-sm transition-all hover:shadow-md"
+            >
+              <Trophy className="mr-2 size-4" />
+              Dashboard
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="ghost"
+                render={<Link href="/login" />}
+                className="rounded-full px-5"
+              >
+                Sign In
+              </Button>
 
-          <Button
-            render={<Link href="/signup" />}
-            className="
-              rounded-full px-6
-              shadow-sm
-              transition-all
-              hover:shadow-md
-            "
-          >
-            <HeartHandshake className="mr-2 size-4" />
-            Join ScoreKind
-          </Button>
+              <Button
+                render={<Link href="/signup" />}
+                className="
+                  rounded-full px-6
+                  shadow-sm
+                  transition-all
+                  hover:shadow-md
+                "
+              >
+                <HeartHandshake className="mr-2 size-4" />
+                Join ScoreKind
+              </Button>
+            </>
+          )}
         </div>
 
         {/* Mobile Actions */}
@@ -273,34 +309,54 @@ function Navbar() {
 
               {/* Mobile CTA */}
               <div className="space-y-3 border-t pt-5">
-                <Button
-                  variant="outline"
-                  className="h-11 w-full rounded-xl"
-                  render={
-                    <Link
-                      href="/login"
-                      onClick={() => setOpen(false)}
-                    />
-                  }
-                >
-                  Sign In
-                </Button>
+                {user ? (
+                  <Button
+                    className="h-11 w-full rounded-xl"
+                    render={
+                      <Link
+                        href="/dashboard"
+                        onClick={() => setOpen(false)}
+                      >
+                        <Trophy className="mr-2 size-4" />
+                        Dashboard
+                      </Link>
+                    }
+                  >
+                    <Trophy className="mr-2 size-4" />
+                    Dashboard
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      variant="outline"
+                      className="h-11 w-full rounded-xl"
+                      render={
+                        <Link
+                          href="/login"
+                          onClick={() => setOpen(false)}
+                        />
+                      }
+                    >
+                      Sign In
+                    </Button>
 
-                <Button
-                  className="h-11 w-full rounded-xl"
-                  render={
-                    <Link
-                      href="/signup"
-                      onClick={() => setOpen(false)}
+                    <Button
+                      className="h-11 w-full rounded-xl"
+                      render={
+                        <Link
+                          href="/signup"
+                          onClick={() => setOpen(false)}
+                        >
+                          <HeartHandshake className="mr-2 size-4" />
+                          Join ScoreKind
+                        </Link>
+                      }
                     >
                       <HeartHandshake className="mr-2 size-4" />
                       Join ScoreKind
-                    </Link>
-                  }
-                >
-                  <HeartHandshake className="mr-2 size-4" />
-                  Join ScoreKind
-                </Button>
+                    </Button>
+                  </>
+                )}
               </div>
             </SheetContent>
           </Sheet>

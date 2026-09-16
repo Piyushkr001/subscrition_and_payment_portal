@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ArrowRight, HeartHandshake, Sparkles, Trophy } from "lucide-react"
+import { ArrowRight, HeartHandshake } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export function FinalCTA() {

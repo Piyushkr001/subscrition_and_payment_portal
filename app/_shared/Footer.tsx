@@ -10,8 +10,7 @@ export function Footer() {
   const currentYear = new Date().getFullYear()
 
   const isAdminShell =
-    pathname === "/admin" ||
-    (pathname?.startsWith("/admin/") && !pathname?.startsWith("/admin-register"))
+    pathname === "/admin" || Boolean(pathname?.startsWith("/admin/"))
 
   if (pathname?.startsWith("/dashboard") || isAdminShell) {
     return null

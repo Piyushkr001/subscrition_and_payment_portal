@@ -16,7 +16,18 @@ AS $$
   );
 $$;
 
--- 2. PROFILES TABLE
+-- 2. Generic updated_at trigger function
+CREATE OR REPLACE FUNCTION public.set_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+-- 3. PROFILES TABLE
 CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   full_name TEXT,
@@ -27,16 +38,23 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Trigger to prevent self-promotion or role tampering by subscribers
+-- Trigger to prevent self-promotion or role tampering by subscribers.
+-- Permits trusted server/service-role operations, database superusers, or established admins.
 CREATE OR REPLACE FUNCTION public.check_role_update()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public
 AS $$
 BEGIN
   IF NEW.role IS DISTINCT FROM OLD.role THEN
-    IF NOT public.is_admin() THEN
-      RAISE EXCEPTION 'Unauthorized: only administrators can change user roles';
+    IF (auth.jwt() ->> 'role') = 'service_role'
+       OR current_user IN ('postgres', 'service_role', 'supabase_admin')
+       OR auth.uid() IS NULL
+       OR public.is_admin() THEN
+      -- Authorized role change
+    ELSE
+      RAISE EXCEPTION 'Unauthorized: only administrators or trusted service operations can change user roles';
     END IF;
   END IF;
   NEW.updated_at = now();
@@ -77,7 +95,7 @@ CREATE TRIGGER on_auth_user_created
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
 
--- 3. SUBSCRIPTIONS TABLE
+-- 4. SUBSCRIPTIONS TABLE
 CREATE TABLE IF NOT EXISTS public.subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -92,7 +110,13 @@ CREATE TABLE IF NOT EXISTS public.subscriptions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 4. SCORES TABLE
+DROP TRIGGER IF EXISTS tr_subscriptions_updated_at ON public.subscriptions;
+CREATE TRIGGER tr_subscriptions_updated_at
+  BEFORE UPDATE ON public.subscriptions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.set_updated_at();
+
+-- 5. SCORES TABLE
 CREATE TABLE IF NOT EXISTS public.scores (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -103,7 +127,13 @@ CREATE TABLE IF NOT EXISTS public.scores (
   CONSTRAINT scores_user_date_unique UNIQUE (user_id, score_date)
 );
 
--- 5. CHARITIES TABLE
+DROP TRIGGER IF EXISTS tr_scores_updated_at ON public.scores;
+CREATE TRIGGER tr_scores_updated_at
+  BEFORE UPDATE ON public.scores
+  FOR EACH ROW
+  EXECUTE FUNCTION public.set_updated_at();
+
+-- 6. CHARITIES TABLE
 CREATE TABLE IF NOT EXISTS public.charities (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name TEXT NOT NULL,
@@ -118,7 +148,13 @@ CREATE TABLE IF NOT EXISTS public.charities (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 6. CHARITY PREFERENCES TABLE
+DROP TRIGGER IF EXISTS tr_charities_updated_at ON public.charities;
+CREATE TRIGGER tr_charities_updated_at
+  BEFORE UPDATE ON public.charities
+  FOR EACH ROW
+  EXECUTE FUNCTION public.set_updated_at();
+
+-- 7. CHARITY PREFERENCES TABLE
 CREATE TABLE IF NOT EXISTS public.charity_preferences (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL UNIQUE REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -128,7 +164,13 @@ CREATE TABLE IF NOT EXISTS public.charity_preferences (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 7. CHARITY CONTRIBUTIONS TABLE
+DROP TRIGGER IF EXISTS tr_charity_preferences_updated_at ON public.charity_preferences;
+CREATE TRIGGER tr_charity_preferences_updated_at
+  BEFORE UPDATE ON public.charity_preferences
+  FOR EACH ROW
+  EXECUTE FUNCTION public.set_updated_at();
+
+-- 8. CHARITY CONTRIBUTIONS TABLE
 CREATE TABLE IF NOT EXISTS public.charity_contributions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
@@ -141,22 +183,22 @@ CREATE TABLE IF NOT EXISTS public.charity_contributions (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 8. DRAWS TABLE
+-- 9. DRAWS TABLE
 CREATE TABLE IF NOT EXISTS public.draws (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draw_date DATE NOT NULL,
   draw_type TEXT NOT NULL CHECK (draw_type IN ('random', 'weighted')),
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'simulated', 'locked', 'published', 'completed')),
   numbers JSONB,
-  subscriber_count INTEGER DEFAULT 0,
-  base_prize_pool NUMERIC(12,2) DEFAULT 0,
-  rollover_amount NUMERIC(12,2) DEFAULT 0,
-  final_prize_pool NUMERIC(12,2) DEFAULT 0,
+  subscriber_count INTEGER DEFAULT 0 CHECK (subscriber_count >= 0),
+  base_prize_pool NUMERIC(12,2) DEFAULT 0 CHECK (base_prize_pool >= 0),
+  rollover_amount NUMERIC(12,2) DEFAULT 0 CHECK (rollover_amount >= 0),
+  final_prize_pool NUMERIC(12,2) DEFAULT 0 CHECK (final_prize_pool >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at TIMESTAMPTZ NULL
 );
 
--- 9. DRAW ENTRIES TABLE (Immutable Historical Snapshot)
+-- 10. DRAW ENTRIES TABLE (Immutable Historical Snapshot)
 CREATE TABLE IF NOT EXISTS public.draw_entries (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draw_id UUID NOT NULL REFERENCES public.draws(id) ON DELETE CASCADE,
@@ -168,18 +210,23 @@ CREATE TABLE IF NOT EXISTS public.draw_entries (
   CONSTRAINT draw_entries_draw_user_unique UNIQUE (draw_id, user_id)
 );
 
--- 10. WINNERS TABLE
+-- 11. WINNERS TABLE
 CREATE TABLE IF NOT EXISTS public.winners (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   draw_id UUID NOT NULL REFERENCES public.draws(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   match_count INTEGER NOT NULL CHECK (match_count BETWEEN 3 AND 5),
   prize_tier TEXT NOT NULL CHECK (prize_tier IN ('three_match', 'four_match', 'five_match')),
-  prize_amount NUMERIC(10,2) NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  prize_amount NUMERIC(10,2) NOT NULL CHECK (prize_amount >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT chk_winners_match_tier CHECK (
+    (match_count = 3 AND prize_tier = 'three_match') OR
+    (match_count = 4 AND prize_tier = 'four_match') OR
+    (match_count = 5 AND prize_tier = 'five_match')
+  )
 );
 
--- 11. WINNER VERIFICATIONS TABLE
+-- 12. WINNER VERIFICATIONS TABLE
 CREATE TABLE IF NOT EXISTS public.winner_verifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   winner_id UUID NOT NULL UNIQUE REFERENCES public.winners(id) ON DELETE CASCADE,
@@ -191,11 +238,11 @@ CREATE TABLE IF NOT EXISTS public.winner_verifications (
   reviewed_at TIMESTAMPTZ NULL
 );
 
--- 12. PAYOUTS TABLE
+-- 13. PAYOUTS TABLE
 CREATE TABLE IF NOT EXISTS public.payouts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   winner_id UUID NOT NULL REFERENCES public.winners(id) ON DELETE CASCADE,
-  amount NUMERIC(10,2) NOT NULL,
+  amount NUMERIC(10,2) NOT NULL CHECK (amount >= 0),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid')),
   reference TEXT,
   paid_at TIMESTAMPTZ NULL,
@@ -290,12 +337,26 @@ CREATE POLICY "Users can view own charity preference"
 
 CREATE POLICY "Users can insert own charity preference"
   ON public.charity_preferences FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+  WITH CHECK (
+    auth.uid() = user_id
+    AND EXISTS (
+      SELECT 1 FROM public.charities
+      WHERE public.charities.id = public.charity_preferences.charity_id
+      AND public.charities.status = 'active'
+    )
+  );
 
 CREATE POLICY "Users can update own charity preference"
   ON public.charity_preferences FOR UPDATE
-  USING (auth.uid() = user_id)
-  WITH CHECK (auth.uid() = user_id);
+  USING (auth.uid() = user_id OR public.is_admin())
+  WITH CHECK (
+    (auth.uid() = user_id OR public.is_admin())
+    AND EXISTS (
+      SELECT 1 FROM public.charities
+      WHERE public.charities.id = public.charity_preferences.charity_id
+      AND public.charities.status = 'active'
+    )
+  );
 
 CREATE POLICY "Users can delete own charity preference"
   ON public.charity_preferences FOR DELETE
@@ -361,6 +422,7 @@ CREATE POLICY "Winners can view own verification"
     OR public.is_admin()
   );
 
+-- Hardened: Winners can insert their own proof, but cannot self-approve or supply review metadata
 CREATE POLICY "Winners can insert own proof"
   ON public.winner_verifications FOR INSERT
   WITH CHECK (
@@ -369,6 +431,10 @@ CREATE POLICY "Winners can insert own proof"
       WHERE public.winners.id = public.winner_verifications.winner_id
       AND public.winners.user_id = auth.uid()
     )
+    AND (status IS NULL OR status = 'pending')
+    AND reviewed_by IS NULL
+    AND reviewed_at IS NULL
+    AND review_notes IS NULL
   );
 
 CREATE POLICY "Admins can update verifications"

@@ -75,8 +75,7 @@ function Navbar() {
   }, [])
 
   const isAdminShell =
-    pathname === "/admin" ||
-    (pathname?.startsWith("/admin/") && !pathname?.startsWith("/admin-register"))
+    pathname === "/admin" || Boolean(pathname?.startsWith("/admin/"))
 
   if (pathname?.startsWith("/dashboard") || isAdminShell) {
     return null

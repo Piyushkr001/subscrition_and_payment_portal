@@ -259,15 +259,6 @@ function LoginForm() {
               Join ScoreKind
             </Link>
           </p>
-          <p className="text-xs text-muted-foreground">
-            Platform administrator?{" "}
-            <Link
-              href="/admin-register"
-              className="font-medium text-destructive underline-offset-4 hover:underline"
-            >
-              Admin Registration (Max 3)
-            </Link>
-          </p>
         </CardFooter>
       </Card>
     </div>

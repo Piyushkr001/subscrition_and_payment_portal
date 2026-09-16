@@ -2,14 +2,26 @@ import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
 import type { Database } from "@/types/database"
 
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co"
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  "placeholder-key"
+function getSupabaseEnv() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
+  if (!supabaseUrl) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL is not configured in environment variables.")
+  }
+
+  if (!supabaseAnonKey) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_ANON_KEY is not configured in environment variables.")
+  }
+
+  return { supabaseUrl, supabaseAnonKey }
+}
 
 export async function updateSession(request: NextRequest) {
+  const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv()
+
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -41,11 +53,9 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname
 
-  const isAdminRoute =
-    pathname === "/admin" ||
-    (pathname.startsWith("/admin/") && !pathname.startsWith("/admin-register"))
+  const isAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/")
 
-  // 1. Unauthenticated users cannot access /dashboard or /admin (excluding /admin-register)
+  // 1. Unauthenticated users cannot access /dashboard or /admin
   if (!user && (pathname.startsWith("/dashboard") || isAdminRoute)) {
     const loginUrl = new URL("/login", request.url)
     loginUrl.searchParams.set("redirectTo", pathname)

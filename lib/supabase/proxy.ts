@@ -41,8 +41,12 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname
 
-  // 1. Unauthenticated users cannot access /dashboard or /admin
-  if (!user && (pathname.startsWith("/dashboard") || pathname.startsWith("/admin"))) {
+  const isAdminRoute =
+    pathname === "/admin" ||
+    (pathname.startsWith("/admin/") && !pathname.startsWith("/admin-register"))
+
+  // 1. Unauthenticated users cannot access /dashboard or /admin (excluding /admin-register)
+  if (!user && (pathname.startsWith("/dashboard") || isAdminRoute)) {
     const loginUrl = new URL("/login", request.url)
     loginUrl.searchParams.set("redirectTo", pathname)
     return NextResponse.redirect(loginUrl)
@@ -54,7 +58,7 @@ export async function updateSession(request: NextRequest) {
   }
 
   // 3. Authenticated subscriber trying to access /admin/* must be rejected
-  if (user && pathname.startsWith("/admin")) {
+  if (user && isAdminRoute) {
     const { data: profile } = await supabase
       .from("profiles")
       .select("role")

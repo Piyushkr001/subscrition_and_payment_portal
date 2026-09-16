@@ -53,7 +53,7 @@ ScoreKind connects amateur golf performance with audited rewards and philanthrop
 ScoreKind enforces a **single source of truth** security model built on Supabase-issued JWT access tokens:
 
 ```
-User Credentials / Signup
+User Credentials / Google OAuth / Admin Registration
           ↓
 Supabase Auth Engine
           ↓
@@ -65,7 +65,7 @@ Next.js 16 Server / Proxy Interception (proxy.ts)
           ↓
 Verified Authenticated User Identity (auth.getUser())
           ↓
-Database Profile & Role (profiles.role)
+Database Profile & Role (profiles.role via RLS)
           ↓
 Role-Based Access Control (RBAC) + Row Level Security (RLS)
           ↓
@@ -75,11 +75,18 @@ Protected Data & Resources
 ### Key Security Principles
 
 1. **No Competing JWT Layer**: The Supabase Auth JWT access token is the sole authentication token. No redundant custom `jsonwebtoken` signing or duplicate `JWT_SECRET` is introduced.
-2. **No Client-Side Token Storage**: Access tokens are **never** stored manually in `localStorage` or `sessionStorage`. All session persistence is handled via secure HTTP-only cookies managed by `@supabase/ssr`.
-3. **Server-Side Identity Derivation**: Authorization decisions **never** trust client-supplied `user_id`, `role`, or `admin=true`. User identity is derived strictly on the server via `supabase.auth.getUser()`.
-4. **Zero-Trust Role Escalation**:
-   - Every new registration receives `role = 'subscriber'` via a PostgreSQL trigger (`handle_new_user`).
-   - Database triggers (`check_role_update`) reject any attempt by subscribers to modify their own role.
+2. **Google OAuth (Subscribers Only)**:
+   - Google Sign-In is provided for regular members/subscribers only.
+   - OAuth registrations always default to `role = 'subscriber'`.
+   - Administrators must authenticate with designated email/password credentials; Google OAuth cannot be used to bypass administrator credential requirements.
+3. **Admin Registration Limits & Email Keyword Rule**:
+   - **System Quota**: Strictly no more than **3 administrators** can register or exist across the system.
+   - **Keyword Requirement**: Admin emails must contain the keyword `"admin"` (case-insensitive, e.g. `abc_admin@ScoreKind.in`).
+   - Enforced at both the API level (`/api/auth/admin-register`) and at the PostgreSQL database level via the `check_admin_limits()` trigger.
+4. **No Client-Side Token Storage**: Access tokens are **never** stored manually in `localStorage` or `sessionStorage`. All session persistence is handled via secure HTTP-only cookies managed by `@supabase/ssr`.
+5. **Server-Side Identity Derivation**: Authorization decisions **never** trust client-supplied `user_id`, `role`, or `admin=true`. User identity is derived strictly on the server via `supabase.auth.getUser()`.
+6. **Zero-Trust Role Escalation**:
+   - Database triggers (`check_role_update` and `check_admin_limits`) reject any attempt by subscribers to modify their own role.
    - Admin routes require verified server-side profile checks (`requireAdmin()`).
 
 ---

@@ -30,6 +30,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { signupSchema, type SignupInput } from "@/lib/validators/auth"
 import { createClient } from "@/lib/supabase/client"
+import { GoogleSignInButton } from "@/components/auth/google-sign-in-button"
 
 export default function SignupPage() {
   const router = useRouter()
@@ -178,6 +179,20 @@ export default function SignupPage() {
                 </AlertDescription>
               </Alert>
             )}
+
+            <div className="mb-5 space-y-4">
+              <GoogleSignInButton
+                label="Sign up with Google (Members)"
+                onError={(err) => setErrorMessage(err)}
+              />
+
+              <div className="relative flex items-center justify-center">
+                <div className="w-full border-t border-border/60" />
+                <span className="absolute bg-card px-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Or with email
+                </span>
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
               {/* Full Name */}

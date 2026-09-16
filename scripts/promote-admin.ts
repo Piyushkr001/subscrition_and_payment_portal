@@ -35,7 +35,31 @@ const supabase = createClient<Database>(supabaseUrl, serviceRoleKey, {
 })
 
 async function promote() {
-  console.log(`Searching for user with email: ${emailToPromote}...`)
+  // 1. Enforce keyword 'admin' in email
+  if (!emailToPromote.includes("admin")) {
+    console.error(
+      `Error: Admin email must contain the keyword "admin" (e.g. abc_admin@ScoreKind.in). Got: "${emailToPromote}"`
+    )
+    process.exit(1)
+  }
+
+  // 2. Enforce maximum 3 administrators across the system
+  const { count: adminCount, error: countError } = await supabase
+    .from("profiles")
+    .select("*", { count: "exact", head: true })
+    .eq("role", "admin")
+
+  if (countError) {
+    console.error("Failed to check admin quota:", countError.message)
+    process.exit(1)
+  }
+
+  if ((adminCount ?? 0) >= 3) {
+    console.error(
+      `Error: Maximum admin quota reached (${adminCount}/3). No additional administrators can be promoted.`
+    )
+    process.exit(1)
+  }
 
   const { data: profiles, error: findError } = await supabase
     .from("profiles")

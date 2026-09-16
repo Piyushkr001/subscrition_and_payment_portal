@@ -29,6 +29,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { loginSchema, type LoginInput } from "@/lib/validators/auth"
 import { createClient } from "@/lib/supabase/client"
+import { GoogleSignInButton } from "@/components/auth/google-sign-in-button"
 
 function LoginForm() {
   const router = useRouter()
@@ -157,6 +158,20 @@ function LoginForm() {
             </Alert>
           )}
 
+          <div className="mb-5 space-y-4">
+            <GoogleSignInButton
+              label="Sign in with Google (Members)"
+              onError={(err) => setErrorMessage(err)}
+            />
+
+            <div className="relative flex items-center justify-center">
+              <div className="w-full border-t border-border/60" />
+              <span className="absolute bg-card px-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Or with email
+              </span>
+            </div>
+          </div>
+
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             {/* Email */}
             <div className="space-y-1.5">
@@ -234,7 +249,7 @@ function LoginForm() {
           </form>
         </CardContent>
 
-        <CardFooter className="flex justify-center border-t py-4 text-center">
+        <CardFooter className="flex flex-col gap-2 border-t py-4 text-center">
           <p className="text-sm text-muted-foreground">
             Don&apos;t have an account yet?{" "}
             <Link
@@ -242,6 +257,15 @@ function LoginForm() {
               className="font-medium text-primary underline-offset-4 hover:underline"
             >
               Join ScoreKind
+            </Link>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Platform administrator?{" "}
+            <Link
+              href="/admin-register"
+              className="font-medium text-destructive underline-offset-4 hover:underline"
+            >
+              Admin Registration (Max 3)
             </Link>
           </p>
         </CardFooter>

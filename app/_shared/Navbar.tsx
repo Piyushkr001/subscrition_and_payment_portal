@@ -74,7 +74,11 @@ function Navbar() {
     }
   }, [])
 
-  if (pathname?.startsWith("/dashboard") || pathname?.startsWith("/admin")) {
+  const isAdminShell =
+    pathname === "/admin" ||
+    (pathname?.startsWith("/admin/") && !pathname?.startsWith("/admin-register"))
+
+  if (pathname?.startsWith("/dashboard") || isAdminShell) {
     return null
   }
 

@@ -62,40 +62,26 @@ export function GoogleSignInButton({
   const router = useRouter()
   const mounted = useMounted()
   const [loading, setLoading] = React.useState(false)
+  const [gisFailed, setGisFailed] = React.useState(false)
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [buttonWidth, setButtonWidth] = React.useState(350)
 
   const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID?.trim()
 
-  // 1. Handle ID token from official @react-oauth/google library
-  const handleIdTokenSuccess = async (credentialResponse: CredentialResponse) => {
-    if (!credentialResponse.credential) {
-      onError?.("No Google credential received. Please try again.")
-      return
-    }
-
-    setLoading(true)
-    try {
-      const supabase = createClient()
-      const { error } = await supabase.auth.signInWithIdToken({
-        provider: "google",
-        token: credentialResponse.credential,
-      })
-
-      if (error) {
-        setLoading(false)
-        onError?.(error.message)
-        return
+  // Google Identity Services button width must be between 200px and 400px
+  React.useEffect(() => {
+    if (containerRef.current) {
+      const measured = containerRef.current.offsetWidth
+      if (measured > 0) {
+        // Clamp to Google GSI constraints: min 200, max 400
+        const clamped = Math.min(400, Math.max(200, measured))
+        setButtonWidth(clamped)
       }
-
-      router.push("/dashboard")
-      router.refresh()
-    } catch {
-      setLoading(false)
-      onError?.("Authentication failed while verifying Google token.")
     }
-  }
+  }, [mounted])
 
-  // 2. Handle Supabase OAuth redirect fallback
-  const handleOAuthSignIn = async () => {
+  // 1. Handle Supabase OAuth redirect flow (the most reliable flow)
+  const handleOAuthSignIn = React.useCallback(async () => {
     setLoading(true)
     try {
       const supabase = createClient()
@@ -122,30 +108,68 @@ export function GoogleSignInButton({
       setLoading(false)
       onError?.("Could not initialize Google authentication. Please try again.")
     }
+  }, [onError])
+
+  // 2. Handle ID token from official @react-oauth/google library
+  const handleIdTokenSuccess = async (credentialResponse: CredentialResponse) => {
+    if (!credentialResponse.credential) {
+      onError?.("No Google credential received. Falling back to standard Google sign-in...")
+      await handleOAuthSignIn()
+      return
+    }
+
+    setLoading(true)
+    try {
+      const supabase = createClient()
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: "google",
+        token: credentialResponse.credential,
+      })
+
+      if (error) {
+        console.warn(
+          "Supabase signInWithIdToken returned an error. Falling back to OAuth redirect:",
+          error.message
+        )
+        // If Supabase rejects the ID token (e.g. client ID not added to Supabase Authorized Client IDs),
+        // fallback to standard OAuth redirect so the user is not blocked
+        await handleOAuthSignIn()
+        return
+      }
+
+      router.push("/dashboard")
+      router.refresh()
+    } catch {
+      console.warn("Google token exchange error, falling back to OAuth redirect.")
+      await handleOAuthSignIn()
+    }
   }
 
-  // If NEXT_PUBLIC_GOOGLE_CLIENT_ID is provided, render official Google Identity Services button via @react-oauth/google
-  if (mounted && googleClientId) {
+  // If NEXT_PUBLIC_GOOGLE_CLIENT_ID is provided and GIS hasn't failed, render official Google button
+  if (mounted && googleClientId && !gisFailed) {
     return (
-      <div className={`relative flex w-full justify-center ${className || ""}`}>
+      <div ref={containerRef} className={`relative flex w-full flex-col items-center justify-center ${className || ""}`}>
         {loading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/80 backdrop-blur-xs">
             <Loader2 className="size-5 animate-spin text-primary" />
           </div>
         )}
         <GoogleOAuthProvider clientId={googleClientId}>
-          <div className="w-full flex justify-center [&>div]:w-full [&_iframe]:w-full! [&_iframe]:max-w-none!">
+          <div className="flex w-full justify-center [&>div]:mx-auto">
             <GoogleLogin
               onSuccess={handleIdTokenSuccess}
               onError={() => {
-                onError?.("Google sign-in was cancelled or failed to load.")
+                console.warn(
+                  "Google Identity Services failed to load or origin is not allowed. Switching to standard OAuth."
+                )
+                setGisFailed(true)
               }}
               useOneTap={false}
               theme="outline"
               size="large"
               shape="rectangular"
               text="continue_with"
-              width="100%"
+              width={buttonWidth.toString()}
             />
           </div>
         </GoogleOAuthProvider>
@@ -153,7 +177,7 @@ export function GoogleSignInButton({
     )
   }
 
-  // Fallback: Google-branded OAuth button calling Supabase Auth
+  // Standard Fallback: Google-branded button calling Supabase Auth signInWithOAuth
   return (
     <Button
       type="button"

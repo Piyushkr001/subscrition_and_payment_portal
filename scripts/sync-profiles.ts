@@ -43,7 +43,7 @@ async function sync() {
       .eq("id", u.id)
       .maybeSingle()
 
-    const role = existingProfile?.role || (u.email?.includes("admin") ? "admin" : "subscriber")
+    const role = existingProfile?.role || "subscriber"
     const fullName =
       u.user_metadata?.full_name ||
       u.user_metadata?.name ||

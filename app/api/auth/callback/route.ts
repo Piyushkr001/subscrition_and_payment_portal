@@ -1,35 +1,28 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
+import { getSafeInternalRedirect } from "@/lib/auth/safe-redirect"
 
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url)
   const code = requestUrl.searchParams.get("code")
-  const next = requestUrl.searchParams.get("next") || "/dashboard"
+  const rawNext = requestUrl.searchParams.get("next")
 
   if (code) {
     const supabase = await createClient()
     const { data, error } = await supabase.auth.exchangeCodeForSession(code)
 
     if (!error && data?.user) {
-      // Ensure Google OAuth logins always route to subscriber dashboard
-      // Google Login is strictly for normal users, not for Admin
+      // Query profile role to determine safe default destination
       const { data: profile } = await supabase
         .from("profiles")
         .select("role")
         .eq("id", data.user.id)
-        .single()
+        .maybeSingle()
 
-      if (profile?.role === "admin" && data.user.app_metadata?.provider === "google") {
-        // Admin accounts must authenticate with credentials, not Google OAuth
-        return NextResponse.redirect(
-          new URL(
-            "/login?error=Administrators%20must%20sign%20in%20with%20their%20admin%20credentials",
-            requestUrl.origin
-          )
-        )
-      }
+      const defaultRedirect = profile?.role === "admin" ? "/admin" : "/dashboard"
+      const safePath = getSafeInternalRedirect(rawNext, defaultRedirect)
 
-      return NextResponse.redirect(new URL(next, requestUrl.origin))
+      return NextResponse.redirect(new URL(safePath, requestUrl.origin))
     }
   }
 

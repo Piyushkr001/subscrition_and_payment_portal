@@ -20,10 +20,13 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { getCurrentProfile } from "@/lib/auth/get-current-profile"
 import { getCurrentUser } from "@/lib/auth/get-current-user"
+import { getLatestScores } from "@/lib/scores/actions"
+import { formatScoreDate } from "@/components/scores/score-card"
 
 export default async function DashboardPage() {
   const user = await getCurrentUser()
   const profile = await getCurrentProfile()
+  const latestScores = await getLatestScores(5)
 
   const firstName =
     profile?.full_name?.split(" ")[0] ||
@@ -112,13 +115,45 @@ export default async function DashboardPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <span className="text-xl font-bold text-foreground">
-                0 Recorded
-              </span>
-              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-                No scores added yet. Enter your latest 18-hole Stableford scores
-                (1–45 pts) to build your rolling-five draw pool.
-              </p>
+              <div className="flex items-center gap-2">
+                <span className="text-xl font-bold text-foreground">
+                  {latestScores.length} of 5 Recorded
+                </span>
+                {latestScores.length === 5 && (
+                  <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 text-[10px]">
+                    Complete
+                  </Badge>
+                )}
+              </div>
+
+              {latestScores.length === 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                  No scores added yet. Enter your latest 18-hole Stableford scores
+                  (1–45 pts) to build your rolling-five draw pool.
+                </p>
+              ) : (
+                <div className="mt-2 space-y-1.5">
+                  {latestScores.slice(0, 3).map((s, idx) => (
+                    <div
+                      key={s.id}
+                      className="flex items-center justify-between rounded-lg bg-muted/40 px-2.5 py-1 text-xs"
+                    >
+                      <span className="font-semibold text-foreground">
+                        {s.score} pts
+                      </span>
+                      <span className="text-muted-foreground">
+                        {formatScoreDate(s.score_date)}
+                        {idx === 0 ? " (Latest)" : ""}
+                      </span>
+                    </div>
+                  ))}
+                  {latestScores.length > 3 && (
+                    <p className="text-[11px] text-muted-foreground text-center pt-0.5">
+                      +{latestScores.length - 3} more round in active set
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <Button
@@ -127,7 +162,7 @@ export default async function DashboardPage() {
               className="w-full justify-between"
               render={<Link href="/dashboard/scores" />}
             >
-              <span>Record Stableford Score</span>
+              <span>{latestScores.length > 0 ? "Manage Scores" : "Record Stableford Score"}</span>
               <ArrowRight className="size-3.5" />
             </Button>
           </CardContent>

@@ -62,9 +62,16 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  // 2. Authenticated users visiting /login or /signup get redirected to /dashboard
+  // 2. Authenticated users visiting /login or /signup get redirected appropriately
   if (user && (pathname === "/login" || pathname === "/signup")) {
-    return NextResponse.redirect(new URL("/dashboard", request.url))
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", user.id)
+      .maybeSingle()
+
+    const target = profile?.role === "admin" ? "/admin" : "/dashboard"
+    return NextResponse.redirect(new URL(target, request.url))
   }
 
   // 3. Authenticated subscriber trying to access /admin/* must be rejected

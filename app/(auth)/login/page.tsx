@@ -13,16 +13,12 @@ import {
   LogIn,
   AlertCircle,
   CheckCircle2,
-  ShieldCheck,
   User,
-  ShieldAlert,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Checkbox } from "@/components/ui/checkbox"
-import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import {
   Card,
   CardContent,
@@ -36,18 +32,15 @@ import { Badge } from "@/components/ui/badge"
 import { loginSchema, type LoginInput } from "@/lib/validators/auth"
 import { createClient } from "@/lib/supabase/client"
 import { GoogleSignInButton } from "@/components/auth/google-sign-in-button"
-
-type AccountType = "member" | "admin"
+import { getSafeInternalRedirect } from "@/lib/auth/safe-redirect"
 
 function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const redirectTo = searchParams.get("redirectTo") || "/dashboard"
+  const rawRedirectTo = searchParams.get("redirectTo")
   const signupSuccess = searchParams.get("signup") === "success"
-  const adminRegistered = searchParams.get("admin") === "registered"
   const authErrorParam = searchParams.get("error")
 
-  const [accountType, setAccountType] = React.useState<AccountType>("member")
   const [showPassword, setShowPassword] = React.useState(false)
   const [errorMessage, setErrorMessage] = React.useState<string | null>(
     authErrorParam
@@ -56,7 +49,6 @@ function LoginForm() {
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors, isSubmitting },
   } = useForm<LoginInput>({
     resolver: zodResolver(loginSchema),
@@ -65,15 +57,6 @@ function LoginForm() {
       password: "",
     },
   })
-
-  // Synchronize when switching between member and admin
-  const handleAccountTypeChange = (newType: AccountType) => {
-    setAccountType(newType)
-    setErrorMessage(null)
-    if (newType === "admin") {
-      setValue("email", "")
-    }
-  }
 
   const onSubmit = async (data: LoginInput) => {
     setErrorMessage(null)
@@ -106,31 +89,20 @@ function LoginForm() {
         .eq("id", authData.user.id)
         .single()
 
-      // Enforce role separation if Admin login mode was chosen
-      if (accountType === "admin") {
-        if (profile?.role !== "admin") {
-          // Immediately revoke session for unauthorized role
-          await supabase.auth.signOut()
-          setErrorMessage(
-            "Access Denied: This account is registered as a Member and does not have administrator privileges. Please switch to Member login."
-          )
-          return
-        }
-        router.push("/admin")
+      if (profile?.role === "admin") {
+        const safeDestination = rawRedirectTo?.startsWith("/admin")
+          ? getSafeInternalRedirect(rawRedirectTo, "/admin")
+          : "/admin"
+        router.push(safeDestination)
       } else {
-        if (profile?.role === "admin") {
-          router.push("/admin")
-        } else {
-          router.push(redirectTo.startsWith("/") ? redirectTo : "/dashboard")
-        }
+        const safeDestination = getSafeInternalRedirect(rawRedirectTo, "/dashboard")
+        router.push(safeDestination)
       }
       router.refresh()
     } catch {
       setErrorMessage("An unexpected error occurred. Please try again.")
     }
   }
-
-  const isAdmin = accountType === "admin"
 
   return (
     <div className="w-full max-w-md">
@@ -162,105 +134,33 @@ function LoginForm() {
         </p>
       </div>
 
-      <Card
-        className={`shadow-lg transition-all duration-300 ${
-          isAdmin
-            ? "border-amber-500/40 bg-card/95 shadow-amber-500/5 ring-1 ring-amber-500/20"
-            : "border-border/60"
-        }`}
-      >
+      <Card className="border-border/60 shadow-lg">
         <CardHeader className="space-y-2 text-center pb-4">
           <div className="flex items-center justify-center">
-            {isAdmin ? (
-              <Badge
-                variant="outline"
-                className="gap-1.5 border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-700 dark:text-amber-300"
-              >
-                <ShieldCheck className="size-3.5 text-amber-600 dark:text-amber-400" />
-                Administrator Security Mode
-              </Badge>
-            ) : (
-              <Badge
-                variant="secondary"
-                className="gap-1.5 px-3 py-1 text-xs font-semibold text-muted-foreground"
-              >
-                <User className="size-3.5 text-primary" />
-                ScoreKind Member Portal
-              </Badge>
-            )}
+            <Badge
+              variant="secondary"
+              className="gap-1.5 px-3 py-1 text-xs font-semibold text-muted-foreground"
+            >
+              <User className="size-3.5 text-primary" />
+              ScoreKind Portal Sign In
+            </Badge>
           </div>
 
           <CardTitle className="text-2xl font-bold tracking-tight">
-            {isAdmin ? "Admin Portal Sign In" : "Welcome back"}
+            Welcome back
           </CardTitle>
           <CardDescription className="text-sm">
-            {isAdmin
-              ? "Restricted administrative console for platform management & auditing"
-              : "Sign in to your ScoreKind account to manage scores, draws, and causes"}
+            Sign in to your ScoreKind account to manage scores, draws, and causes
           </CardDescription>
         </CardHeader>
 
         <CardContent>
-          {/* Account Type Selector (Dropdown & Checkbox Showcase) */}
-          <div className="mb-5 rounded-xl border border-border/70 bg-muted/30 p-3.5">
-            <div className="flex flex-col gap-2.5">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="accountTypeSelect" className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Login Role Selection:
-                </Label>
-                <NativeSelect
-                  id="accountTypeSelect"
-                  value={accountType}
-                  onChange={(e) =>
-                    handleAccountTypeChange(e.target.value as AccountType)
-                  }
-                  size="sm"
-                  className="w-44 text-xs font-medium"
-                >
-                  <NativeSelectOption value="member">
-                    👤 Member (User)
-                  </NativeSelectOption>
-                  <NativeSelectOption value="admin">
-                    🛡️ Administrator
-                  </NativeSelectOption>
-                </NativeSelect>
-              </div>
-
-              {/* Checkbox alternative selector */}
-              <div className="flex items-center space-x-2 pt-1 border-t border-border/40">
-                <Checkbox
-                  id="adminCheckbox"
-                  checked={isAdmin}
-                  onCheckedChange={(checked) =>
-                    handleAccountTypeChange(checked ? "admin" : "member")
-                  }
-                />
-                <label
-                  htmlFor="adminCheckbox"
-                  className="text-xs font-medium cursor-pointer text-muted-foreground select-none"
-                >
-                  Sign in as Platform Administrator
-                </label>
-              </div>
-            </div>
-          </div>
-
           {signupSuccess && (
             <Alert className="mb-4 border-teal-500/20 bg-teal-500/10 text-teal-800 dark:text-teal-300">
               <CheckCircle2 className="size-4 text-teal-600 dark:text-teal-400" />
               <AlertTitle>Account created</AlertTitle>
               <AlertDescription className="text-xs">
                 Your member account is ready. Sign in with your credentials.
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {adminRegistered && (
-            <Alert className="mb-4 border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300">
-              <ShieldCheck className="size-4 text-amber-600 dark:text-amber-400" />
-              <AlertTitle>Administrator Registered</AlertTitle>
-              <AlertDescription className="text-xs">
-                Your administrator account has been created. Please sign in below.
               </AlertDescription>
             </Alert>
           )}
@@ -275,43 +175,29 @@ function LoginForm() {
             </Alert>
           )}
 
-          {/* Member Mode: Google Login */}
-          {!isAdmin ? (
-            <div className="mb-5 space-y-4">
-              <GoogleSignInButton
-                label="Sign in with Google (Members)"
-                onError={(err) => setErrorMessage(err)}
-              />
+          {/* Google Sign In */}
+          <div className="mb-5 space-y-4">
+            <GoogleSignInButton
+              label="Sign in with Google"
+              onError={(err) => setErrorMessage(err)}
+            />
 
-              <div className="relative flex items-center justify-center">
-                <div className="w-full border-t border-border/60" />
-                <span className="absolute bg-card px-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Or with email
-                </span>
-              </div>
+            <div className="relative flex items-center justify-center">
+              <div className="w-full border-t border-border/60" />
+              <span className="absolute bg-card px-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Or with email
+              </span>
             </div>
-          ) : (
-            <div className="mb-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2.5 text-xs text-amber-800 dark:text-amber-300">
-              <div className="flex items-center gap-1.5 font-medium">
-                <ShieldAlert className="size-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-                <span>Executive Credential Requirement</span>
-              </div>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Google OAuth is restricted to Member accounts. Admins must authenticate via designated credentials.
-              </p>
-            </div>
-          )}
+          </div>
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
             {/* Email */}
             <div className="space-y-1.5">
-              <Label htmlFor="email">
-                {isAdmin ? "Administrator Email" : "Email address"}
-              </Label>
+              <Label htmlFor="email">Email address</Label>
               <Input
                 id="email"
                 type="email"
-                placeholder={isAdmin ? "admin@scorekind.in" : "you@example.com"}
+                placeholder="you@example.com"
                 autoComplete="email"
                 disabled={isSubmitting}
                 aria-invalid={!!errors.email}
@@ -364,11 +250,7 @@ function LoginForm() {
             <Button
               type="submit"
               disabled={isSubmitting}
-              className={`w-full font-semibold shadow-sm transition-colors ${
-                isAdmin
-                  ? "bg-amber-600 hover:bg-amber-700 text-white dark:bg-amber-600 dark:hover:bg-amber-700"
-                  : ""
-              }`}
+              className="w-full font-semibold shadow-sm"
             >
               {isSubmitting ? (
                 <>
@@ -377,26 +259,22 @@ function LoginForm() {
                 </>
               ) : (
                 <>
-                  {isAdmin ? (
-                    <ShieldCheck className="mr-2 size-4" />
-                  ) : (
-                    <LogIn className="mr-2 size-4" />
-                  )}
-                  {isAdmin ? "Sign In to Admin Portal" : "Sign In"}
+                  <LogIn className="mr-2 size-4" />
+                  Sign In
                 </>
               )}
             </Button>
           </form>
         </CardContent>
 
-        <CardFooter className="flex flex-col gap-2 border-t py-4 text-center">
+        <CardFooter className="flex justify-center border-t py-4 text-center">
           <p className="text-sm text-muted-foreground">
             Don&apos;t have an account yet?{" "}
             <Link
-              href={isAdmin ? "/signup?role=admin" : "/signup"}
+              href="/signup"
               className="font-medium text-primary underline-offset-4 hover:underline"
             >
-              {isAdmin ? "Register as Admin" : "Join ScoreKind"}
+              Join ScoreKind
             </Link>
           </p>
         </CardFooter>

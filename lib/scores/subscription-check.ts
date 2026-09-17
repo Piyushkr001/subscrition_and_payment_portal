@@ -1,28 +1,87 @@
 import { createClient } from "@/lib/supabase/server"
+import type { SubscriptionPlan, SubscriptionStatus } from "@/types/database"
 
 export interface ScoreAccessResult {
   allowed: boolean
+  status: SubscriptionStatus | "none" | "admin"
+  plan?: SubscriptionPlan | null
+  currentPeriodEnd?: string | null
+  cancelAtPeriodEnd?: boolean
   reason?: string
-  status?: string
+}
+
+export interface UserSubscriptionDetails {
+  id?: string
+  userId: string
+  providerCustomerId?: string | null
+  providerSubscriptionId?: string | null
+  stripePriceId?: string | null
+  plan?: SubscriptionPlan | null
+  status: SubscriptionStatus | "none"
+  currentPeriodStart?: string | null
+  currentPeriodEnd?: string | null
+  cancelAtPeriodEnd: boolean
+  isActive: boolean
 }
 
 /**
- * Clean Subscription Gating Abstraction for Score Management
+ * Retrieve current user's active or latest subscription details from PostgreSQL.
+ */
+export async function getUserSubscription(userId: string): Promise<UserSubscriptionDetails | null> {
+  if (!userId) return null
+
+  const supabase = await createClient()
+
+  const { data: subscription, error } = await supabase
+    .from("subscriptions")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error || !subscription) {
+    return {
+      userId,
+      status: "none",
+      cancelAtPeriodEnd: false,
+      isActive: false,
+    }
+  }
+
+  const isActive =
+    subscription.status === "active" || subscription.status === "trialing"
+
+  return {
+    id: subscription.id,
+    userId: subscription.user_id,
+    providerCustomerId: subscription.provider_customer_id,
+    providerSubscriptionId: subscription.provider_subscription_id,
+    stripePriceId: subscription.stripe_price_id,
+    plan: subscription.plan,
+    status: (subscription.status as SubscriptionStatus) || "none",
+    currentPeriodStart: subscription.current_period_start,
+    currentPeriodEnd: subscription.current_period_end,
+    cancelAtPeriodEnd: subscription.cancel_at_period_end || false,
+    isActive,
+  }
+}
+
+/**
+ * Real Subscription Access Control Guard
  *
- * NOTE: Stripe payment processing & subscription billing will be implemented
- * in the subsequent milestone (Milestone: Stripe Subscription System).
- *
- * POLICY FOR CURRENT MILESTONE:
- * - Authenticated subscribers are granted access to manage scores so the
- *   Stableford scoring engine, rolling-five derivations, and history can be
- *   tested and used.
- * - Once Stripe is active, this check will query `public.subscriptions`
- *   for an active/trialing status and restrict scoring when unpaid or lapsed.
+ * Enforces:
+ * 1. User authentication.
+ * 2. Role bypass for administrators.
+ * 3. Verified active or trialing subscription in public.subscriptions.
+ * Non-subscribed or past_due users are restricted from mutating Stableford scores
+ * and entering monthly draws.
  */
 export async function canManageScores(userId: string): Promise<ScoreAccessResult> {
   if (!userId) {
     return {
       allowed: false,
+      status: "none",
       reason: "Authentication required to manage Stableford scores.",
     }
   }
@@ -39,31 +98,39 @@ export async function canManageScores(userId: string): Promise<ScoreAccessResult
   if (!profile) {
     return {
       allowed: false,
+      status: "none",
       reason: "User profile not found.",
     }
   }
 
-  // Admins always have access
+  // Admins always have full access
   if (profile.role === "admin") {
-    return { allowed: true }
+    return {
+      allowed: true,
+      status: "admin",
+    }
   }
 
-  // 2. Query subscription table for existing record if any
-  const { data: subscription } = await supabase
-    .from("subscriptions")
-    .select("status")
-    .eq("user_id", userId)
-    .maybeSingle()
+  // 2. Query subscription table for active record
+  const userSub = await getUserSubscription(userId)
 
-  // Future enforcement point:
-  // When Stripe milestone is deployed, uncomment strict status check:
-  // if (!subscription || subscription.status !== "active") {
-  //   return { allowed: false, reason: "Active subscription required.", status: subscription?.status || "none" }
-  // }
+  if (!userSub || !userSub.isActive) {
+    return {
+      allowed: false,
+      status: userSub?.status || "none",
+      plan: userSub?.plan,
+      currentPeriodEnd: userSub?.currentPeriodEnd,
+      cancelAtPeriodEnd: userSub?.cancelAtPeriodEnd,
+      reason:
+        "An active ScoreKind membership is required to record Stableford scores and enter monthly prize draws.",
+    }
+  }
 
-  // Current milestone development mode: Allow authenticated subscribers
   return {
     allowed: true,
-    status: subscription?.status || "pending_stripe_milestone",
+    status: userSub.status,
+    plan: userSub.plan,
+    currentPeriodEnd: userSub.currentPeriodEnd,
+    cancelAtPeriodEnd: userSub.cancelAtPeriodEnd,
   }
 }

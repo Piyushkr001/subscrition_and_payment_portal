@@ -171,6 +171,15 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Client & Server | Modern alias for publishable key |
 | `SUPABASE_SERVICE_ROLE_KEY` | **Server-Only** | Privileged service key for admin CLI scripts (**never commit or prefix with `NEXT_PUBLIC_`**) |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Client & Server | Optional Google OAuth Client ID |
+| `STRIPE_SECRET_KEY` | **Server-Only** | Stripe Secret Key for server actions and checkout sessions (**never prefix with `NEXT_PUBLIC_`**) |
+| `STRIPE_WEBHOOK_SECRET` | **Server-Only** | Stripe Webhook signing secret for validating event signatures (**never prefix with `NEXT_PUBLIC_`**) |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Client & Server | Stripe publishable key |
+| `STRIPE_MONTHLY_PRICE_ID` | Server-Only | Optional Stripe Price ID for monthly plan (uses dynamic recurring fallback if unset) |
+| `STRIPE_YEARLY_PRICE_ID` | Server-Only | Optional Stripe Price ID for yearly plan (uses dynamic recurring fallback if unset) |
+| `NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_AMOUNT` | Client & Server | Configurable monthly price (default: `1299`) |
+| `NEXT_PUBLIC_STRIPE_YEARLY_PRICE_AMOUNT` | Client & Server | Configurable annual price (default: `11999`) |
+| `NEXT_PUBLIC_STRIPE_CURRENCY` | Client & Server | ISO currency code (default: `inr`) |
+| `NEXT_PUBLIC_STRIPE_CURRENCY_SYMBOL` | Client & Server | Currency symbol (default: `₹`) |
 
 ---
 
@@ -210,6 +219,11 @@ bunx supabase db push
    - Attaches `check_profile_update()` trigger to enforce role and email immutability.
    - Drops `UNIQUE(winner_id)` on `winner_verifications` to support multiple audit attempts upon rejected proof resubmission.
    - Hardens `public.winners` SELECT access against anonymous scraping.
+3. `supabase/migrations/20260918000000_stripe_subscriptions_hardening.sql`:
+   - Adds `stripe_price_id` to `public.subscriptions`.
+   - Expands `status` check constraint to support all Stripe subscription lifecycles (`trialing`, `canceled`, `unpaid`, `paused`, etc.).
+   - Adds unique index on `provider_subscription_id` to ensure idempotent webhook upserts.
+   - Adds indexes on `provider_customer_id` and composite `(user_id, status)`.
 
 ---
 
@@ -253,6 +267,9 @@ WHERE email = 'user@example.com';
 | `/admin/*` | **Admin** | Protected: unauthenticated requests redirect to `/login`; subscribers redirect to `/dashboard` |
 | `/api/auth/callback` | **Public** | OAuth code exchange with safe internal redirection |
 | `/api/me` | **Authenticated** | Returns verified user identity derived from session JWT |
+| `/api/stripe/checkout` | **Authenticated** | Initiates Stripe Checkout Session for monthly/yearly plans |
+| `/api/stripe/portal` | **Authenticated** | Initiates Stripe Customer Portal Session for billing management |
+| `/api/webhooks/stripe` | **Public (Verified)** | Ingests Stripe webhooks, validates cryptographic signature, syncs Supabase state |
 
 ---
 
@@ -279,8 +296,11 @@ The initial schema contains 11 public relational tables:
 To run the complete milestone test suite:
 
 ```bash
-# Run security and score management end-to-end verification
+# Run complete milestone test suite (Redirects, Scores, Role/Email Immutability, Stripe & RLS)
 bun run scripts/test-milestone.ts
+
+# Run targeted Stripe billing test suite
+bun run scripts/test-stripe-billing.ts
 
 # Verify ESLint (0 errors, 0 warnings)
 bun run lint
@@ -293,12 +313,6 @@ bun run build
 
 ## Future Development Milestones
 
-1. **Stripe Subscription System** *(Recommended Next Milestone)*:
-   - Monthly and annual subscription products and price IDs.
-   - Stripe Checkout Session creation and customer portal redirection.
-   - Webhook processing (`checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_failed`).
-   - Subscription status synchronization with `public.subscriptions`.
-   - Active subscription gating for live monthly draw entry.
-2. **Monthly Draw Engine**: Automated number selection, weighted draw algorithms, snapshot locking.
-3. **Charity Payment Remittance**: Monthly charity allocation settlement and transfer records.
-4. **Winner Verification & Payouts**: Handicap certificate upload, scorecard review queue, payout settlement.
+1. **Monthly Draw Engine**: Automated number selection, weighted draw algorithms, snapshot locking.
+2. **Charity Payment Remittance**: Monthly charity allocation settlement and transfer records.
+3. **Winner Verification & Payouts**: Handicap certificate upload, scorecard review queue, payout settlement.

@@ -2,10 +2,12 @@
 
 import * as React from "react"
 import { useRouter } from "next/navigation"
-import { Plus, Info, ShieldCheck } from "lucide-react"
+import Link from "next/link"
+import { Plus, Info, ShieldCheck, AlertCircle, ArrowRight } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { LatestScores } from "@/components/scores/latest-scores"
 import { ScoreHistory } from "@/components/scores/score-history"
 import { ScoreEmptyState } from "@/components/scores/score-empty-state"
@@ -16,9 +18,15 @@ import type { Score } from "@/lib/scores/types"
 
 interface ScoresClientProps {
   initialScores: Score[]
+  canManage?: boolean
+  accessReason?: string
 }
 
-export function ScoresClient({ initialScores }: ScoresClientProps) {
+export function ScoresClient({
+  initialScores,
+  canManage = true,
+  accessReason,
+}: ScoresClientProps) {
   const router = useRouter()
 
   const [isAddOpen, setIsAddOpen] = React.useState(false)
@@ -36,6 +44,32 @@ export function ScoresClient({ initialScores }: ScoresClientProps) {
 
   return (
     <div className="space-y-8">
+      {/* Inactive Membership Alert Banner */}
+      {!canManage && (
+        <Alert className="border-amber-500/30 bg-amber-500/10 text-foreground">
+          <AlertCircle className="size-4 text-amber-600 dark:text-amber-400" />
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 w-full">
+            <div>
+              <AlertTitle className="text-sm font-semibold">
+                Membership Inactive
+              </AlertTitle>
+              <AlertDescription className="text-xs text-muted-foreground mt-0.5">
+                {accessReason ||
+                  "An active ScoreKind membership is required to record new rounds and participate in monthly draws."}
+              </AlertDescription>
+            </div>
+            <Button
+              size="sm"
+              className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs shrink-0 self-start sm:self-center gap-1.5"
+              render={<Link href="/#pricing" />}
+            >
+              <span>Activate Membership</span>
+              <ArrowRight className="size-3.5" />
+            </Button>
+          </div>
+        </Alert>
+      )}
+
       {/* 1. Header Bar */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
@@ -48,19 +82,29 @@ export function ScoresClient({ initialScores }: ScoresClientProps) {
         </div>
 
         <div className="flex items-center gap-3">
-          <Button
-            onClick={() => setIsAddOpen(true)}
-            className="gap-2 font-semibold shadow-sm"
-          >
-            <Plus className="size-4" />
-            Add Score
-          </Button>
+          {canManage ? (
+            <Button
+              onClick={() => setIsAddOpen(true)}
+              className="gap-2 font-semibold shadow-sm"
+            >
+              <Plus className="size-4" />
+              Add Score
+            </Button>
+          ) : (
+            <Button
+              className="gap-2 font-semibold shadow-sm opacity-80"
+              render={<Link href="/#pricing" />}
+            >
+              <Plus className="size-4" />
+              Add Score (Subscribe)
+            </Button>
+          )}
         </div>
       </div>
 
       {/* 2. Main Content: Empty State vs. Active Scores */}
       {initialScores.length === 0 ? (
-        <ScoreEmptyState onAddScore={() => setIsAddOpen(true)} />
+        <ScoreEmptyState onAddScore={() => canManage ? setIsAddOpen(true) : router.push("/#pricing")} />
       ) : (
         <div className="space-y-8">
           {/* Latest 5 Scores Cards */}

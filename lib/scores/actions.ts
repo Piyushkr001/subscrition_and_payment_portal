@@ -7,7 +7,7 @@ import { canManageScores } from "@/lib/scores/subscription-check"
 import type { Score, ScoreActionResult } from "@/lib/scores/types"
 
 /**
- * Helper to get authenticated user and enforce score management permissions.
+ * Helper to get verified authenticated user from Supabase session JWT.
  */
 async function getAuthenticatedUser() {
   const supabase = await createClient()
@@ -18,11 +18,6 @@ async function getAuthenticatedUser() {
 
   if (authError || !user) {
     throw new Error("Authentication required. Please sign in to continue.")
-  }
-
-  const access = await canManageScores(user.id)
-  if (!access.allowed) {
-    throw new Error(access.reason || "Score management is not available.")
   }
 
   return { supabase, user }
@@ -96,6 +91,15 @@ export async function createScore(
 ): Promise<ScoreActionResult<Score>> {
   try {
     const { supabase, user } = await getAuthenticatedUser()
+
+    // Enforce active subscription / permissions before allowing score insertion
+    const access = await canManageScores(user.id)
+    if (!access.allowed) {
+      return {
+        success: false,
+        error: access.reason || "Active subscription required to record Stableford scores.",
+      }
+    }
 
     // 1. Validate input bounds & format with Zod
     const parsed = scoreSchema.safeParse(input)
@@ -172,6 +176,15 @@ export async function updateScore(
 ): Promise<ScoreActionResult<Score>> {
   try {
     const { supabase, user } = await getAuthenticatedUser()
+
+    // Enforce active subscription / permissions before allowing score update
+    const access = await canManageScores(user.id)
+    if (!access.allowed) {
+      return {
+        success: false,
+        error: access.reason || "Active subscription required to edit Stableford scores.",
+      }
+    }
 
     if (!scoreId) {
       return { success: false, error: "Score ID is required." }
@@ -252,6 +265,15 @@ export async function deleteScore(
 ): Promise<ScoreActionResult<void>> {
   try {
     const { supabase, user } = await getAuthenticatedUser()
+
+    // Enforce active subscription / permissions before allowing score deletion
+    const access = await canManageScores(user.id)
+    if (!access.allowed) {
+      return {
+        success: false,
+        error: access.reason || "Active subscription required to delete Stableford scores.",
+      }
+    }
 
     if (!scoreId) {
       return { success: false, error: "Score ID is required." }

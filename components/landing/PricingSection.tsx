@@ -1,51 +1,79 @@
 "use client"
 
-import { useState } from "react"
-import Link from "next/link"
-import { ArrowRight, Check, Sparkles } from "lucide-react"
+import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
+import { ArrowRight, Check, Sparkles, Loader2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
+import { createClient } from "@/lib/supabase/client"
+import { PLANS, formatPlanPrice, type PlanId } from "@/lib/stripe/config"
 
 export function PricingSection() {
-  const [billingCycle, setBillingCycle] = useState<"monthly" | "yearly">("yearly")
+  const router = useRouter()
+  const [billingCycle, setBillingCycle] = useState<PlanId>("yearly")
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null)
+  const [loadingPlan, setLoadingPlan] = useState<PlanId | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    async function checkAuth() {
+      try {
+        const supabase = createClient()
+        const {
+          data: { session },
+        } = await supabase.auth.getSession()
+        setIsAuthenticated(!!session?.user)
+      } catch {
+        setIsAuthenticated(false)
+      }
+    }
+    checkAuth()
+  }, [])
+
+  const handleSubscribe = async (planId: PlanId) => {
+    setErrorMessage(null)
+
+    // 1. If unauthenticated, redirect to signup with plan parameter
+    if (!isAuthenticated) {
+      router.push(`/signup?plan=${planId}`)
+      return
+    }
+
+    // 2. If authenticated, create Stripe Checkout Session
+    try {
+      setLoadingPlan(planId)
+      const res = await fetch("/api/stripe/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ plan: planId }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || "Failed to start checkout session.")
+      }
+
+      window.location.assign(data.url)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Checkout error occurred."
+      setErrorMessage(msg)
+      setLoadingPlan(null)
+    }
+  }
 
   const plans = [
     {
-      name: "Monthly Membership",
-      id: "monthly",
-      badge: "Flexible",
-      price: "₹1,299",
-      period: "/ month",
-      description: "Complete ScoreKind experience with total month-to-month flexibility.",
-      features: [
-        "Full rolling 5-score Stableford tracker (1–45)",
-        "Automated entry into all monthly prize draws",
-        "3-tier prize eligibility (3, 4, or 5 numbers)",
-        "Minimum 10% pledged to your chosen charity",
-        "Member dashboard & score verification tools",
-        "Cancel, pause, or switch tiers anytime",
-      ],
-      ctaText: "Start Monthly Plan",
+      ...PLANS.monthly,
+      price: formatPlanPrice(PLANS.monthly),
       popular: billingCycle === "monthly",
     },
     {
-      name: "Annual Membership",
-      id: "yearly",
-      badge: "Best Value · Save 20%",
-      price: "₹11,999",
-      period: "/ year",
-      subprice: "Equivalent to ~₹999/month",
-      description: "Our most popular membership for committed golfers and regular givers.",
-      features: [
-        "Everything included in the monthly membership",
-        "12 consecutive monthly prize draw entries",
-        "Continuous 10%+ charity contribution pledge",
-        "Eligibility for all 5-number jackpot rollovers",
-        "Priority charity impact reporting & certificates",
-        "Best annual rate with 2 months free",
-      ],
-      ctaText: "Start Annual Plan",
+      ...PLANS.yearly,
+      price: formatPlanPrice(PLANS.yearly),
       popular: billingCycle === "yearly",
     },
   ]
@@ -74,6 +102,12 @@ export function PricingSection() {
             Choose the membership that fits your playing cadence. Every plan includes
             score tracking, monthly draws, and guaranteed charity donations.
           </p>
+
+          {errorMessage && (
+            <div className="mt-4 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-2 text-xs font-medium text-destructive">
+              {errorMessage}
+            </div>
+          )}
 
           {/* Billing Cycle Toggle */}
           <div className="mt-8 flex items-center justify-center">
@@ -169,15 +203,25 @@ export function PricingSection() {
               <div className="mt-8 pt-4">
                 <Button
                   size="lg"
-                  render={<Link href="/signup" />}
+                  disabled={loadingPlan !== null}
+                  onClick={() => handleSubscribe(plan.id)}
                   className={`w-full rounded-xl font-semibold transition-all ${
                     plan.popular
                       ? "bg-linear-to-r from-teal-700 to-emerald-600 text-white shadow-md shadow-teal-700/20 hover:from-teal-800 hover:to-emerald-700"
                       : "border border-border bg-background hover:bg-muted text-foreground"
                   }`}
                 >
-                  <span>{plan.ctaText}</span>
-                  <ArrowRight className="ml-2 size-4" />
+                  {loadingPlan === plan.id ? (
+                    <>
+                      <Loader2 className="mr-2 size-4 animate-spin" />
+                      Connecting to Checkout...
+                    </>
+                  ) : (
+                    <>
+                      <span>{plan.ctaText}</span>
+                      <ArrowRight className="ml-2 size-4" />
+                    </>
+                  )}
                 </Button>
                 <p className="mt-2.5 text-center text-[11px] text-muted-foreground">
                   No hidden fees · 10%+ charity guarantee

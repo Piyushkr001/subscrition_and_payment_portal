@@ -18,14 +18,23 @@ import {
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { getCurrentProfile } from "@/lib/auth/get-current-profile"
 import { getCurrentUser } from "@/lib/auth/get-current-user"
 import { getLatestScores } from "@/lib/scores/actions"
+import { getUserSubscription } from "@/lib/scores/subscription-check"
 import { formatScoreDate } from "@/components/scores/score-card"
+import { BillingPortalButton } from "@/components/dashboard/billing-portal-button"
 
-export default async function DashboardPage() {
+interface DashboardPageProps {
+  searchParams: Promise<{ checkout_success?: string }>
+}
+
+export default async function DashboardPage(props: DashboardPageProps) {
+  const searchParams = await props.searchParams
   const user = await getCurrentUser()
   const profile = await getCurrentProfile()
+  const subscription = user ? await getUserSubscription(user.id) : null
   const latestScores = await getLatestScores(5)
 
   const firstName =
@@ -35,6 +44,21 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-8">
+      {/* Checkout Success Synchronization Banner */}
+      {searchParams.checkout_success === "true" && (
+        <Alert className="border-teal-500/30 bg-teal-500/10 text-foreground">
+          <Sparkles className="size-4 text-teal-600 dark:text-teal-400" />
+          <div>
+            <AlertTitle className="text-sm font-semibold">
+              Payment Received!
+            </AlertTitle>
+            <AlertDescription className="text-xs text-muted-foreground mt-0.5">
+              Your subscription is being synchronized directly from Stripe. If your status has not yet updated to Active, please refresh the page in a few moments.
+            </AlertDescription>
+          </div>
+        </Alert>
+      )}
+
       {/* Welcome Hero Banner */}
       <div className="flex flex-col justify-between gap-4 rounded-2xl border border-border/60 bg-card p-6 shadow-sm sm:flex-row sm:items-center">
         <div className="space-y-1">
@@ -79,27 +103,72 @@ export default async function DashboardPage() {
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xl font-bold text-foreground">
-                  Inactive
+                  {subscription?.isActive
+                    ? "Active"
+                    : subscription?.status === "past_due"
+                    ? "Past Due"
+                    : subscription?.status === "cancelled"
+                    ? "Cancelled"
+                    : "Inactive"}
                 </span>
-                <Badge variant="secondary" className="text-[11px]">
-                  No Active Plan
+                <Badge
+                  variant={
+                    subscription?.isActive
+                      ? "default"
+                      : subscription?.status === "past_due"
+                      ? "destructive"
+                      : "secondary"
+                  }
+                  className={`text-[11px] ${
+                    subscription?.isActive
+                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 font-semibold"
+                      : ""
+                  }`}
+                >
+                  {subscription?.isActive
+                    ? subscription.plan === "yearly"
+                      ? "Annual Plan"
+                      : "Monthly Plan"
+                    : subscription?.status === "past_due"
+                    ? "Payment Failed"
+                    : "No Active Plan"}
                 </Badge>
               </div>
               <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-                Activate your monthly or annual membership to participate in
-                prize draws and automate charitable giving.
+                {subscription?.isActive
+                  ? subscription.cancelAtPeriodEnd
+                    ? `Your membership cancels at the end of the current period on ${
+                        subscription.currentPeriodEnd
+                          ? new Date(subscription.currentPeriodEnd).toLocaleDateString("en-GB")
+                          : "renewal date"
+                      }.`
+                    : `Renews on ${
+                        subscription.currentPeriodEnd
+                          ? new Date(subscription.currentPeriodEnd).toLocaleDateString("en-GB")
+                          : "end of period"
+                      }. Full Stableford tracking & prize draw access enabled.`
+                  : subscription?.status === "past_due"
+                  ? "Your recent membership payment attempt was unsuccessful. Please update your payment method in the portal."
+                  : "Activate your monthly or annual membership to participate in prize draws and automate charitable giving."}
               </p>
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-between"
-              render={<Link href="/#pricing" />}
-            >
-              <span>View Membership Plans</span>
-              <ArrowRight className="size-3.5" />
-            </Button>
+            {subscription?.providerCustomerId ? (
+              <BillingPortalButton
+                className="w-full justify-between"
+                label="Manage Billing & Invoices"
+              />
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-between"
+                render={<Link href="/#pricing" />}
+              >
+                <span>View Membership Plans</span>
+                <ArrowRight className="size-3.5" />
+              </Button>
+            )}
           </CardContent>
         </Card>
 

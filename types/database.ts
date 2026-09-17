@@ -10,10 +10,14 @@ export type UserRole = "subscriber" | "admin"
 export type SubscriptionPlan = "monthly" | "yearly"
 export type SubscriptionStatus =
   | "active"
+  | "trialing"
   | "past_due"
   | "cancelled"
+  | "canceled"
+  | "unpaid"
   | "expired"
   | "incomplete"
+  | "paused"
 export type CharityStatus = "draft" | "active" | "inactive"
 export type ContributionType = "subscription" | "donation"
 export type ContributionStatus = "pending" | "completed" | "failed"
@@ -67,6 +71,7 @@ export interface Database {
           user_id: string
           provider_customer_id: string | null
           provider_subscription_id: string | null
+          stripe_price_id: string | null
           plan: SubscriptionPlan | null
           status: SubscriptionStatus | null
           current_period_start: string | null
@@ -80,6 +85,7 @@ export interface Database {
           user_id: string
           provider_customer_id?: string | null
           provider_subscription_id?: string | null
+          stripe_price_id?: string | null
           plan?: SubscriptionPlan | null
           status?: SubscriptionStatus | null
           current_period_start?: string | null
@@ -93,6 +99,7 @@ export interface Database {
           user_id?: string
           provider_customer_id?: string | null
           provider_subscription_id?: string | null
+          stripe_price_id?: string | null
           plan?: SubscriptionPlan | null
           status?: SubscriptionStatus | null
           current_period_start?: string | null

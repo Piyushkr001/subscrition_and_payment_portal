@@ -59,50 +59,85 @@ export async function POST(request: Request) {
       "http://localhost:3000"
 
     // 4. Construct line items (use pre-created price ID if available, else dynamic recurring price_data)
-    const lineItems = planConfig.stripePriceId
+    const getDynamicLineItems = () => [
+      {
+        price_data: {
+          currency: planConfig.currency,
+          unit_amount: planConfig.priceAmount * 100, // Stripe expects amount in smallest currency unit (e.g. paise / cents)
+          recurring: {
+            interval: planConfig.interval,
+          },
+          product_data: {
+            name: `ScoreKind ${planConfig.name}`,
+            description: planConfig.description,
+          },
+        },
+        quantity: 1,
+      },
+    ]
+
+    let lineItems = planConfig.stripePriceId
       ? [
           {
             price: planConfig.stripePriceId,
             quantity: 1,
           },
         ]
-      : [
-          {
-            price_data: {
-              currency: planConfig.currency,
-              unit_amount: planConfig.priceAmount * 100, // Stripe expects amount in smallest currency unit (e.g. paise / cents)
-              recurring: {
-                interval: planConfig.interval,
-              },
-              product_data: {
-                name: `ScoreKind ${planConfig.name}`,
-                description: planConfig.description,
-              },
-            },
-            quantity: 1,
-          },
-        ]
+      : getDynamicLineItems()
 
-    // 5. Create Stripe Checkout Session
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      customer: customerId,
-      line_items: lineItems,
-      success_url: `${origin}/dashboard?checkout_success=true&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/#pricing`,
-      metadata: {
-        userId: user.id,
-        plan: planConfig.id,
-      },
-      subscription_data: {
+    // 5. Create Stripe Checkout Session with fallback resilience
+    let session
+    try {
+      session = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        customer: customerId,
+        line_items: lineItems,
+        success_url: `${origin}/dashboard?checkout_success=true&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/#pricing`,
         metadata: {
           userId: user.id,
           plan: planConfig.id,
         },
-      },
-      allow_promotion_codes: true,
-      billing_address_collection: "auto",
-    })
+        subscription_data: {
+          metadata: {
+            userId: user.id,
+            plan: planConfig.id,
+          },
+        },
+        allow_promotion_codes: true,
+        billing_address_collection: "auto",
+      })
+    } catch (checkoutErr: unknown) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const err = checkoutErr as any
+      if (err?.code === "resource_missing" && planConfig.stripePriceId) {
+        console.warn(
+          `[Stripe Checkout]: Configured price ID '${planConfig.stripePriceId}' was not found in Stripe account. Falling back to dynamic recurring price_data.`
+        )
+        lineItems = getDynamicLineItems()
+        session = await stripe.checkout.sessions.create({
+          mode: "subscription",
+          customer: customerId,
+          line_items: lineItems,
+          success_url: `${origin}/dashboard?checkout_success=true&session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${origin}/#pricing`,
+          metadata: {
+            userId: user.id,
+            plan: planConfig.id,
+          },
+          subscription_data: {
+            metadata: {
+              userId: user.id,
+              plan: planConfig.id,
+            },
+          },
+          allow_promotion_codes: true,
+          billing_address_collection: "auto",
+        })
+      } else {
+        throw checkoutErr
+      }
+    }
 
     if (!session.url) {
       return NextResponse.json(

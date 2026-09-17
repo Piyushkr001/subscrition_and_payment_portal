@@ -100,7 +100,11 @@ export function GoogleSignInButton({
 
       if (error) {
         setLoading(false)
-        onError?.(error.message)
+        const friendlyMessage =
+          error.message.includes("not enabled") || error.message.includes("Provider")
+            ? "Google provider is not enabled in your Supabase project. Please enable Google in Supabase Dashboard → Authentication → Providers."
+            : error.message
+        onError?.(friendlyMessage)
       } else if (data?.url) {
         window.location.href = data.url
       }
@@ -128,11 +132,20 @@ export function GoogleSignInButton({
 
       if (error) {
         console.warn(
-          "Supabase signInWithIdToken returned an error. Falling back to OAuth redirect:",
+          "Supabase signInWithIdToken returned an error:",
           error.message
         )
-        // If Supabase rejects the ID token (e.g. client ID not added to Supabase Authorized Client IDs),
-        // fallback to standard OAuth redirect so the user is not blocked
+
+        // If Google provider is not enabled on the Supabase backend at all:
+        if (error.message.includes("not enabled") || error.message.includes("Provider")) {
+          setLoading(false)
+          onError?.(
+            "Google provider is not enabled in your Supabase project. Please enable Google in Supabase Dashboard → Authentication → Providers."
+          )
+          return
+        }
+
+        // Otherwise try standard OAuth redirect
         await handleOAuthSignIn()
         return
       }

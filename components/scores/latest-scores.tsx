@@ -61,7 +61,7 @@ export function LatestScores({ scores, onAddScore }: LatestScoresProps) {
               key={`empty-slot-${i}`}
               type="button"
               onClick={onAddScore}
-              className="flex min-h-[160px] flex-col items-center justify-center rounded-xl border border-dashed border-border/80 bg-muted/20 p-5 text-center transition-all hover:border-primary/50 hover:bg-muted/40 group"
+              className="flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-border/80 bg-muted/20 p-5 text-center transition-all hover:border-primary/50 hover:bg-muted/40 group"
             >
               <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
                 <Plus className="size-5" />

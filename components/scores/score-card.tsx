@@ -29,13 +29,13 @@ export function ScoreCard({ score, index, isLatest }: ScoreCardProps) {
     <Card
       className={`relative overflow-hidden transition-all duration-200 hover:shadow-md ${
         isLatest
-          ? "border-teal-500/40 bg-teal-500/[0.03] dark:bg-teal-500/[0.05] ring-1 ring-teal-500/20"
+          ? "border-teal-500/40 bg-teal-500/3 dark:bg-teal-500/5 ring-1 ring-teal-500/20"
           : "border-border/70"
       }`}
     >
       <div className="absolute top-0 right-0 h-16 w-16 overflow-hidden pointer-events-none">
         <div
-          className={`absolute transform rotate-45 text-center text-[10px] font-bold py-0.5 right-[-35px] top-[18px] w-[120px] ${
+          className={`absolute transform rotate-45 text-center text-[10px] font-bold py-0.5 -right-8.75 top-4.5 w-30 ${
             isLatest
               ? "bg-teal-600 text-white shadow-xs"
               : "bg-muted text-muted-foreground"

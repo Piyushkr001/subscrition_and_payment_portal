@@ -70,7 +70,7 @@ export function ScoresClient({ initialScores }: ScoresClientProps) {
           />
 
           {/* Explanatory Guide Card */}
-          <Card className="border-teal-500/20 bg-teal-500/[0.04] dark:bg-teal-500/[0.06]">
+          <Card className="border-teal-500/20 bg-teal-500/4 dark:bg-teal-500/6">
             <CardContent className="p-4 sm:p-5 flex flex-col sm:flex-row items-start gap-3 text-xs">
               <div className="flex size-8 items-center justify-center rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400 shrink-0 mt-0.5">
                 <Info className="size-4" />

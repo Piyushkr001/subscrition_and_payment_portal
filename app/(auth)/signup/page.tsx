@@ -3,7 +3,7 @@
 import * as React from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import {
@@ -36,6 +36,10 @@ import { GoogleSignInButton } from "@/components/auth/google-sign-in-button"
 
 function SignupForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const rawPlan = searchParams.get("plan")
+  const plan = rawPlan === "monthly" || rawPlan === "yearly" ? rawPlan : null
+  const targetDestination = plan ? `/dashboard/billing?plan=${plan}` : "/dashboard"
 
   const [showPassword, setShowPassword] = React.useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false)
@@ -69,7 +73,7 @@ function SignupForm() {
           data: {
             full_name: data.fullName.trim(),
           },
-          emailRedirectTo: `${window.location.origin}/api/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(targetDestination)}`,
         },
       })
 
@@ -82,10 +86,11 @@ function SignupForm() {
         setRegisteredEmail(data.email)
         setIsSuccessConfirmation(true)
       } else if (authData.session) {
-        router.push("/dashboard")
+        router.push(targetDestination)
         router.refresh()
       } else {
-        router.push("/login?signup=success")
+        const loginRedirect = plan ? `/login?signup=success&plan=${plan}` : "/login?signup=success"
+        router.push(loginRedirect)
       }
     } catch {
       setErrorMessage("An unexpected error occurred. Please try again.")
@@ -195,6 +200,7 @@ function SignupForm() {
             <div className="mb-5 space-y-4">
               <GoogleSignInButton
                 label="Sign up with Google"
+                plan={plan || undefined}
                 onError={(err) => setErrorMessage(err)}
               />
 
@@ -328,7 +334,7 @@ function SignupForm() {
                 </div>
                 <p className="mt-1 text-muted-foreground">
                   Your profile starts with a default subscriber role and
-                  guarantees 10%+ charity contribution selection.
+                  includes 10%+ charity contribution selection.
                 </p>
               </div>
 
@@ -356,7 +362,7 @@ function SignupForm() {
             <p className="text-sm text-muted-foreground">
               Already have an account?{" "}
               <Link
-                href="/login"
+                href={plan ? `/login?plan=${plan}` : "/login"}
                 className="font-medium text-primary underline-offset-4 hover:underline"
               >
                 Sign In

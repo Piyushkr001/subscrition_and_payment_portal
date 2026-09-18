@@ -17,7 +17,6 @@ export function getStripe(): Stripe {
 
   if (!stripeClient) {
     stripeClient = new Stripe(secretKey, {
-      apiVersion: "2026-08-26.dahlia" as unknown as Stripe.LatestApiVersion,
       typescript: true,
       appInfo: {
         name: "ScoreKind",

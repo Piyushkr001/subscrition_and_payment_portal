@@ -166,6 +166,7 @@ cp .env.example .env.local
 
 | Variable | Scope | Description |
 | :--- | :--- | :--- |
+| `APP_URL` | **Server-Only** | Trusted application URL for Stripe return paths (e.g. `http://localhost:3000` or production domain) |
 | `NEXT_PUBLIC_SUPABASE_URL` | Client & Server | Your Supabase project URL (e.g. `https://rxyhvivuqytuqxjelbqu.supabase.co`) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client & Server | Your Supabase Anon / Publishable key |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Client & Server | Modern alias for publishable key |
@@ -173,13 +174,69 @@ cp .env.example .env.local
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Client & Server | Optional Google OAuth Client ID |
 | `STRIPE_SECRET_KEY` | **Server-Only** | Stripe Secret Key for server actions and checkout sessions (**never prefix with `NEXT_PUBLIC_`**) |
 | `STRIPE_WEBHOOK_SECRET` | **Server-Only** | Stripe Webhook signing secret for validating event signatures (**never prefix with `NEXT_PUBLIC_`**) |
-| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Client & Server | Stripe publishable key |
-| `STRIPE_MONTHLY_PRICE_ID` | Server-Only | Optional Stripe Price ID for monthly plan (uses dynamic recurring fallback if unset) |
-| `STRIPE_YEARLY_PRICE_ID` | Server-Only | Optional Stripe Price ID for yearly plan (uses dynamic recurring fallback if unset) |
-| `NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_AMOUNT` | Client & Server | Configurable monthly price (default: `1299`) |
-| `NEXT_PUBLIC_STRIPE_YEARLY_PRICE_AMOUNT` | Client & Server | Configurable annual price (default: `11999`) |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Client & Server | Stripe publishable key (reserved for client-side Stripe.js use) |
+| `STRIPE_MONTHLY_PRICE_ID` | **Server-Only** | **Required** Stripe Price ID for monthly plan (authoritative charge source) |
+| `STRIPE_YEARLY_PRICE_ID` | **Server-Only** | **Required** Stripe Price ID for yearly plan (authoritative charge source) |
+| `NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_AMOUNT` | Client & Server | Configurable monthly price display amount (default: `1299`) |
+| `NEXT_PUBLIC_STRIPE_YEARLY_PRICE_AMOUNT` | Client & Server | Configurable annual price display amount (default: `11999`) |
 | `NEXT_PUBLIC_STRIPE_CURRENCY` | Client & Server | ISO currency code (default: `inr`) |
 | `NEXT_PUBLIC_STRIPE_CURRENCY_SYMBOL` | Client & Server | Currency symbol (default: `₹`) |
+
+---
+
+## Stripe Architecture & Hardened Subscription Pipeline
+
+ScoreKind implements an enterprise-grade, zero-trust billing model:
+
+```
+Stripe Event (Webhook)
+      ↓
+POST /api/webhooks/stripe
+      ↓
+stripe.webhooks.constructEvent(rawBody, signature, STRIPE_WEBHOOK_SECRET)
+      ↓
+stripe_webhook_events idempotency lookup (duplicate? -> return 200)
+      ↓
+syncSubscriptionFromStripe()
+      ↓
+Fail-Closed Normalizer (unknown status -> 'incomplete'; canceled -> 'cancelled')
+      ↓
+Out-of-Order Timestamp Guard (last_stripe_event_timestamp)
+      ↓
+1:1 stripe_customers mapping table & public.subscriptions record
+      ↓
+PostgreSQL has_active_subscription() Helper & RLS Enforcement
+```
+
+### 1. Webhook Endpoint & Local Forwarding
+
+The authoritative webhook route is:
+
+```
+POST /api/webhooks/stripe
+```
+
+To forward Stripe test events to your local development environment:
+
+```bash
+stripe listen --forward-to localhost:3000/api/webhooks/stripe
+```
+
+Copy the printed webhook signing secret (`whsec_...`) into your `.env` file as `STRIPE_WEBHOOK_SECRET`.
+
+### 2. Supported Webhook Events
+
+- `checkout.session.completed`: Synchronizes new member subscription details and associates user identity.
+- `customer.subscription.created` & `customer.subscription.updated`: Reconciles plan changes, billing intervals, and renewal dates.
+- `customer.subscription.deleted`: Sets subscription status to `cancelled` and terminates auto-renew.
+- `invoice.payment_succeeded`: Retrieves the live subscription object from Stripe to re-verify state before confirming active membership.
+- `invoice.payment_failed`: Retrieves live subscription state and synchronizes `past_due` or `unpaid` restrictions.
+
+### 3. Duplicate Prevention & Customer Mapping
+
+- **Checkout Check**: Authenticated members with `active` or `trialing` status cannot create duplicate subscriptions. The server returns HTTP 409 and guides the user to the Customer Portal.
+- **Customer Reuse**: The `public.stripe_customers` table ensures 1:1 mapping between `profiles.id` and Stripe's `cus_...` ID. Abandoned checkout attempts do not generate orphaned customers.
+- **No Dynamic Price Fallback**: Charges are determined strictly by configured server-side `STRIPE_MONTHLY_PRICE_ID` and `STRIPE_YEARLY_PRICE_ID`. Dynamic `price_data` generation is completely disabled.
 
 ---
 
@@ -212,7 +269,7 @@ bunx supabase db push
 ### 4. Applied Migrations
 
 1. `supabase/migrations/20260916000000_initial_schema.sql`:
-   - Provisions all 11 core tables (`profiles`, `subscriptions`, `scores`, `charities`, `charity_preferences`, `charity_contributions`, `draws`, `draw_entries`, `winners`, `winner_verifications`, `payouts`).
+   - Provisions all 11 core tables (`profiles`, `subscriptions`, `scores`, `charities`, etc.).
    - Attaches `handle_new_user()` trigger to `auth.users`.
    - Enables RLS on all 11 tables with default security policies.
 2. `supabase/migrations/20260917000000_security_and_verifications_hardening.sql`:
@@ -221,9 +278,15 @@ bunx supabase db push
    - Hardens `public.winners` SELECT access against anonymous scraping.
 3. `supabase/migrations/20260918000000_stripe_subscriptions_hardening.sql`:
    - Adds `stripe_price_id` to `public.subscriptions`.
-   - Expands `status` check constraint to support all Stripe subscription lifecycles (`trialing`, `canceled`, `unpaid`, `paused`, etc.).
+   - Expands `status` check constraint to support Stripe subscription lifecycles.
    - Adds unique index on `provider_subscription_id` to ensure idempotent webhook upserts.
-   - Adds indexes on `provider_customer_id` and composite `(user_id, status)`.
+4. `supabase/migrations/20260918120000_stripe_hardening.sql`:
+   - Canonicalizes subscription status to `'cancelled'` (strictly disallows `'canceled'`).
+   - Introduces dedicated `public.stripe_customers` 1:1 mapping table.
+   - Introduces `public.stripe_webhook_events` table for retry-safe idempotency tracking.
+   - Adds `last_stripe_event_timestamp` to `public.subscriptions` for out-of-order event protection.
+   - Adds `public.has_active_subscription()` `SECURITY DEFINER` function.
+   - Hardens `public.scores` RLS policies (INSERT, UPDATE, DELETE) to require active/trialing subscription or admin role.
 
 ---
 
@@ -257,55 +320,44 @@ WHERE email = 'user@example.com';
 
 | Route Group | Access Level | Description / Protection Rule |
 | :--- | :--- | :--- |
-| `/` | **Public** | Marketing landing page |
+| `/` | **Public** | Marketing landing page with pricing calculator |
 | `/charities` | **Public** | Partner charity directory |
 | `/draws` | **Public** | Draw mechanics & prize tiers |
-| `/login` | **Public** | Sign in (redirects to `/dashboard` or `/admin` based on trusted role) |
-| `/signup` | **Public** | Sign up (subscriber registration only) |
+| `/login` | **Public** | Sign in (preserves billing plan and redirects to `/dashboard` or `/admin`) |
+| `/signup` | **Public** | Sign up (preserves billing plan parameter) |
 | `/dashboard/*` | **Subscriber** | Protected: unauthenticated requests redirect to `/login?redirectTo=...` |
-| `/dashboard/scores` | **Subscriber** | Score management interface (rolling-five cards, history, add/edit/delete) |
+| `/dashboard/billing` | **Subscriber** | Dedicated billing management, plan selection, and Stripe continuation |
+| `/dashboard/scores` | **Subscriber** | Score management interface (gated mutation controls for active members) |
 | `/admin/*` | **Admin** | Protected: unauthenticated requests redirect to `/login`; subscribers redirect to `/dashboard` |
 | `/api/auth/callback` | **Public** | OAuth code exchange with safe internal redirection |
 | `/api/me` | **Authenticated** | Returns verified user identity derived from session JWT |
-| `/api/stripe/checkout` | **Authenticated** | Initiates Stripe Checkout Session for monthly/yearly plans |
+| `/api/stripe/checkout` | **Authenticated** | Initiates Stripe Checkout Session with duplicate check & customer reuse |
 | `/api/stripe/portal` | **Authenticated** | Initiates Stripe Customer Portal Session for billing management |
 | `/api/webhooks/stripe` | **Public (Verified)** | Ingests Stripe webhooks, validates cryptographic signature, syncs Supabase state |
 
 ---
 
-## Database Schema & Row Level Security
-
-The initial schema contains 11 public relational tables:
-
-1. `public.profiles`: User details synced from `auth.users` via trigger; default role `'subscriber'`.
-2. `public.subscriptions`: Membership billing cycles, plans (`monthly`, `yearly`), statuses (`active`, `past_due`, `cancelled`, etc.).
-3. `public.scores`: Golf scores with constraints (`1 <= score <= 45`), unique per `(user_id, score_date)`.
-4. `public.charities`: Partner charities (`slug` UNIQUE, `status` IN `draft`, `active`, `inactive`).
-5. `public.charity_preferences`: Cause percentage allocations (`10 <= contribution_percentage <= 100`, only active charities).
-6. `public.charity_contributions`: Audited distribution ledger (`amount >= 0`, `percentage >= 10`).
-7. `public.draws`: Monthly draw cycles (`random`, `weighted`) with non-negative prize pools and subscriber counts.
-8. `public.draw_entries`: Immutable draw participant snapshots (`scores_snapshot`, `subscription_snapshot`).
-9. `public.winners`: Draw outcome records with consistency check between `match_count` (3–5) and `prize_tier`.
-10. `public.winner_verifications`: Auditable scorecard & handicap verification queue supporting multiple submissions.
-11. `public.payouts`: Payout settlement records (`amount >= 0`).
-
----
-
 ## Automated Verification & Testing
 
-To run the complete milestone test suite:
+All integration tests are protected against accidental production execution and require explicit opt-in:
 
 ```bash
-# Run complete milestone test suite (Redirects, Scores, Role/Email Immutability, Stripe & RLS)
-bun run scripts/test-milestone.ts
+# 1. Targeted Stripe Billing, Idempotency & Customer Mapping Suite
+ALLOW_DESTRUCTIVE_TESTS=true bun run scripts/test-stripe-billing.ts
 
-# Run targeted Stripe billing test suite
-bun run scripts/test-stripe-billing.ts
+# 2. Real User JWT RLS Bypass Test (verifies inactive users cannot insert/update scores directly)
+ALLOW_DESTRUCTIVE_TESTS=true bun run scripts/test-rls-bypass.ts
 
-# Verify ESLint (0 errors, 0 warnings)
+# 3. Comprehensive Milestone Test Suite
+ALLOW_DESTRUCTIVE_TESTS=true bun run scripts/test-milestone.ts
+
+# 4. ESLint Verification (0 errors, 0 warnings)
 bun run lint
 
-# Verify Next.js 16 Turbopack production build
+# 5. TypeScript Compiler Verification
+bunx tsc --noEmit
+
+# 6. Next.js 16 Production Build
 bun run build
 ```
 
@@ -313,6 +365,7 @@ bun run build
 
 ## Future Development Milestones
 
-1. **Monthly Draw Engine**: Automated number selection, weighted draw algorithms, snapshot locking.
-2. **Charity Payment Remittance**: Monthly charity allocation settlement and transfer records.
+1. **Charity System**: Real charity partner CRUD, admin management, public directory search/filter, and subscriber contribution ledger.
+2. **Monthly Draw Engine**: Automated number selection, weighted draw algorithms, snapshot locking.
 3. **Winner Verification & Payouts**: Handicap certificate upload, scorecard review queue, payout settlement.
+

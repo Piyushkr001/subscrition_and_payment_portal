@@ -2,52 +2,8 @@ import { NextResponse } from "next/server"
 import type Stripe from "stripe"
 import { getStripe } from "@/lib/stripe/client"
 import { createAdminClient } from "@/lib/supabase/admin"
-import type { SubscriptionPlan, SubscriptionStatus } from "@/types/database"
-
-function normalizeSubscriptionStatus(status: Stripe.Subscription.Status | string): SubscriptionStatus {
-  switch (status) {
-    case "active":
-      return "active"
-    case "trialing":
-      return "trialing"
-    case "past_due":
-      return "past_due"
-    case "canceled":
-      return "cancelled"
-    case "unpaid":
-      return "unpaid"
-    case "incomplete_expired":
-      return "expired"
-    case "incomplete":
-      return "incomplete"
-    case "paused":
-      return "paused"
-    default:
-      return "active"
-  }
-}
-
-function resolvePlan(interval?: string | null): SubscriptionPlan {
-  return interval === "year" ? "yearly" : "monthly"
-}
-
-function extractSubscriptionPeriod(subscription: Stripe.Subscription) {
-  const item = subscription.items?.data?.[0]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rawSub = subscription as any
-
-  const startTimestamp = item?.current_period_start || rawSub.current_period_start
-  const endTimestamp = item?.current_period_end || rawSub.current_period_end
-
-  const periodStart = startTimestamp
-    ? new Date(startTimestamp * 1000).toISOString()
-    : null
-  const periodEnd = endTimestamp
-    ? new Date(endTimestamp * 1000).toISOString()
-    : null
-
-  return { periodStart, periodEnd }
-}
+import { syncSubscriptionFromStripe } from "@/lib/stripe/sync-subscription"
+import type { SubscriptionPlan } from "@/types/database"
 
 function extractInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -103,101 +59,76 @@ export async function POST(request: Request) {
 
   const supabaseAdmin = createAdminClient()
 
+  // 1. Check idempotency: Return 200 immediately if this event ID was already successfully processed
+  try {
+    const { data: existingEvent, error: checkEventError } = await supabaseAdmin
+      .from("stripe_webhook_events")
+      .select("status")
+      .eq("stripe_event_id", event.id)
+      .maybeSingle()
+
+    if (checkEventError) {
+      console.error("[Stripe Webhook]: Error checking event idempotency:", checkEventError)
+      // Throw to return 500 so Stripe retries
+      throw checkEventError
+    }
+
+    if (existingEvent?.status === "processed") {
+      console.log(`[Stripe Webhook]: Duplicate event ${event.id} already processed. Acknowledging with 200.`)
+      return NextResponse.json({ received: true, duplicate: true }, { status: 200 })
+    }
+
+    // Record or update event status as 'processing'
+    const { error: upsertEventError } = await supabaseAdmin
+      .from("stripe_webhook_events")
+      .upsert(
+        {
+          stripe_event_id: event.id,
+          event_type: event.type,
+          status: "processing",
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: "stripe_event_id" }
+      )
+
+    if (upsertEventError) {
+      console.error("[Stripe Webhook]: Error recording event processing status:", upsertEventError)
+      throw upsertEventError
+    }
+  } catch (idempotencyErr) {
+    console.error("[Stripe Webhook Idempotency Error]:", idempotencyErr)
+    return NextResponse.json(
+      { error: "Database error verifying webhook idempotency." },
+      { status: 500 }
+    )
+  }
+
+  // 2. Process event with centralized subscription synchronizer
   try {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session
 
         if (session.mode === "subscription" && session.subscription) {
-          const subscriptionId = typeof session.subscription === "string"
-            ? session.subscription
-            : session.subscription.id
+          const subscriptionId =
+            typeof session.subscription === "string"
+              ? session.subscription
+              : session.subscription.id
 
           const subscription = await stripe.subscriptions.retrieve(subscriptionId)
-
-          const customerId = typeof session.customer === "string"
-            ? session.customer
-            : session.customer?.id || (typeof subscription.customer === "string" ? subscription.customer : subscription.customer?.id)
 
           const userId =
             session.metadata?.userId ||
             session.client_reference_id ||
             subscription.metadata?.userId
 
-          if (!userId) {
-            console.warn(`[Stripe Webhook]: No userId found for session ${session.id}`)
-            break
-          }
+          await syncSubscriptionFromStripe(subscription, {
+            eventTimestamp: event.created,
+            userId,
+            fallbackPlan: session.metadata?.plan as SubscriptionPlan,
+          })
 
-          const priceId = subscription.items?.data?.[0]?.price?.id || null
-          const interval = subscription.items?.data?.[0]?.price?.recurring?.interval
-          const plan = (session.metadata?.plan as SubscriptionPlan) || resolvePlan(interval)
-          const status = normalizeSubscriptionStatus(subscription.status)
-          const { periodStart, periodEnd } = extractSubscriptionPeriod(subscription)
-
-          // Check if subscription record already exists
-          const { data: existingSub } = await supabaseAdmin
-            .from("subscriptions")
-            .select("id")
-            .eq("provider_subscription_id", subscriptionId)
-            .maybeSingle()
-
-          if (existingSub) {
-            await supabaseAdmin
-              .from("subscriptions")
-              .update({
-                provider_customer_id: customerId,
-                stripe_price_id: priceId,
-                plan,
-                status,
-                current_period_start: periodStart,
-                current_period_end: periodEnd,
-                cancel_at_period_end: subscription.cancel_at_period_end,
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", existingSub.id)
-          } else {
-            // Check if placeholder row exists for user
-            const { data: userSub } = await supabaseAdmin
-              .from("subscriptions")
-              .select("id")
-              .eq("user_id", userId)
-              .is("provider_subscription_id", null)
-              .maybeSingle()
-
-            if (userSub) {
-              await supabaseAdmin
-                .from("subscriptions")
-                .update({
-                  provider_customer_id: customerId,
-                  provider_subscription_id: subscriptionId,
-                  stripe_price_id: priceId,
-                  plan,
-                  status,
-                  current_period_start: periodStart,
-                  current_period_end: periodEnd,
-                  cancel_at_period_end: subscription.cancel_at_period_end,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("id", userSub.id)
-            } else {
-              await supabaseAdmin
-                .from("subscriptions")
-                .insert({
-                  user_id: userId,
-                  provider_customer_id: customerId,
-                  provider_subscription_id: subscriptionId,
-                  stripe_price_id: priceId,
-                  plan,
-                  status,
-                  current_period_start: periodStart,
-                  current_period_end: periodEnd,
-                  cancel_at_period_end: subscription.cancel_at_period_end,
-                })
-            }
-          }
-
-          console.log(`[Stripe Webhook]: Synced subscription for user ${userId} (status: ${status})`)
+          console.log(`[Stripe Webhook]: Synced checkout session for user ${userId || "unknown"}`)
         }
         break
       }
@@ -205,65 +136,10 @@ export async function POST(request: Request) {
       case "customer.subscription.created":
       case "customer.subscription.updated": {
         const subscription = event.data.object as Stripe.Subscription
-        const subscriptionId = subscription.id
-        const customerId = typeof subscription.customer === "string"
-          ? subscription.customer
-          : subscription.customer?.id
-
-        const priceId = subscription.items?.data?.[0]?.price?.id || null
-        const interval = subscription.items?.data?.[0]?.price?.recurring?.interval
-        const plan = (subscription.metadata?.plan as SubscriptionPlan) || resolvePlan(interval)
-        const status = normalizeSubscriptionStatus(subscription.status)
-        const { periodStart, periodEnd } = extractSubscriptionPeriod(subscription)
-
-        // 1. Try matching by provider_subscription_id
-        const { data: existingSub } = await supabaseAdmin
-          .from("subscriptions")
-          .select("id, user_id")
-          .eq("provider_subscription_id", subscriptionId)
-          .maybeSingle()
-
-        if (existingSub) {
-          await supabaseAdmin
-            .from("subscriptions")
-            .update({
-              provider_customer_id: customerId,
-              stripe_price_id: priceId,
-              plan,
-              status,
-              current_period_start: periodStart,
-              current_period_end: periodEnd,
-              cancel_at_period_end: subscription.cancel_at_period_end,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", existingSub.id)
-        } else {
-          // 2. Try matching by metadata userId or customerId
-          let resolvedUserId: string | null = subscription.metadata?.userId || null
-          if (!resolvedUserId && customerId) {
-            const { data: subByCustomer } = await supabaseAdmin
-              .from("subscriptions")
-              .select("user_id")
-              .eq("provider_customer_id", customerId)
-              .maybeSingle()
-            resolvedUserId = subByCustomer?.user_id || null
-          }
-
-          if (resolvedUserId) {
-            await supabaseAdmin.from("subscriptions").insert({
-              user_id: resolvedUserId,
-              provider_customer_id: customerId,
-              provider_subscription_id: subscriptionId,
-              stripe_price_id: priceId,
-              plan,
-              status,
-              current_period_start: periodStart,
-              current_period_end: periodEnd,
-              cancel_at_period_end: subscription.cancel_at_period_end,
-            })
-          }
-        }
-        console.log(`[Stripe Webhook]: Updated subscription ${subscriptionId} (status: ${status})`)
+        await syncSubscriptionFromStripe(subscription, {
+          eventTimestamp: event.created,
+        })
+        console.log(`[Stripe Webhook]: Synced subscription lifecycle (${event.type}) for ${subscription.id}`)
         break
       }
 
@@ -271,16 +147,22 @@ export async function POST(request: Request) {
         const subscription = event.data.object as Stripe.Subscription
         const subscriptionId = subscription.id
 
-        await supabaseAdmin
+        const { error: deleteError } = await supabaseAdmin
           .from("subscriptions")
           .update({
             status: "cancelled",
             cancel_at_period_end: false,
+            last_stripe_event_timestamp: event.created,
             updated_at: new Date().toISOString(),
           })
           .eq("provider_subscription_id", subscriptionId)
 
-        console.log(`[Stripe Webhook]: Cancelled subscription ${subscriptionId}`)
+        if (deleteError) {
+          console.error(`[Stripe Webhook Error]: Failed to cancel subscription ${subscriptionId}:`, deleteError)
+          throw deleteError
+        }
+
+        console.log(`[Stripe Webhook]: Marked subscription ${subscriptionId} as cancelled`)
         break
       }
 
@@ -289,13 +171,12 @@ export async function POST(request: Request) {
         const subscriptionId = extractInvoiceSubscriptionId(invoice)
 
         if (subscriptionId) {
-          await supabaseAdmin
-            .from("subscriptions")
-            .update({
-              status: "active",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("provider_subscription_id", subscriptionId)
+          // Do not blindly set active; fetch actual Stripe subscription state and sync
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+          await syncSubscriptionFromStripe(subscription, {
+            eventTimestamp: event.created,
+          })
+          console.log(`[Stripe Webhook]: Handled invoice.payment_succeeded for sub ${subscriptionId}`)
         }
         break
       }
@@ -305,28 +186,56 @@ export async function POST(request: Request) {
         const subscriptionId = extractInvoiceSubscriptionId(invoice)
 
         if (subscriptionId) {
-          await supabaseAdmin
-            .from("subscriptions")
-            .update({
-              status: "past_due",
-              updated_at: new Date().toISOString(),
-            })
-            .eq("provider_subscription_id", subscriptionId)
-          console.log(`[Stripe Webhook]: Payment failed for subscription ${subscriptionId}`)
+          // Retrieve actual subscription state and sync (e.g. past_due or unpaid)
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+          await syncSubscriptionFromStripe(subscription, {
+            eventTimestamp: event.created,
+          })
+          console.log(`[Stripe Webhook]: Handled invoice.payment_failed for sub ${subscriptionId}`)
         }
         break
       }
 
       default:
-        // Acknowledge unhandled events
+        // Other events safely acknowledged
         break
+    }
+
+    // 3. Mark webhook event as 'processed'
+    const { error: markProcessedError } = await supabaseAdmin
+      .from("stripe_webhook_events")
+      .update({
+        status: "processed",
+        processed_at: new Date().toISOString(),
+        error_message: null,
+      })
+      .eq("stripe_event_id", event.id)
+
+    if (markProcessedError) {
+      console.warn("[Stripe Webhook]: Could not mark event as processed:", markProcessedError)
     }
 
     return NextResponse.json({ received: true }, { status: 200 })
   } catch (error) {
-    console.error("[Stripe Webhook Handler Error]:", error)
+    const errorMessage = error instanceof Error ? error.message : "Error processing webhook event."
+    console.error("[Stripe Webhook Handler Error]:", errorMessage, error)
+
+    // Mark event as 'failed' in audit table so it can be retried safely
+    try {
+      await supabaseAdmin
+        .from("stripe_webhook_events")
+        .update({
+          status: "failed",
+          error_message: errorMessage,
+        })
+        .eq("stripe_event_id", event.id)
+    } catch (auditErr: unknown) {
+      console.error("[Stripe Webhook]: Failed to update audit log to failed:", auditErr)
+    }
+
+    // Return 500 so Stripe knows to retry
     return NextResponse.json(
-      { error: "Error processing webhook event." },
+      { error: errorMessage },
       { status: 500 }
     )
   }

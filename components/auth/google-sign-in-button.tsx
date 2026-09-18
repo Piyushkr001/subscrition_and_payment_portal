@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/client"
 interface GoogleSignInButtonProps {
   label?: string
   className?: string
+  plan?: string
   onError?: (error: string) => void
 }
 
@@ -57,6 +58,7 @@ function GoogleLogoSvg({ className }: { className?: string }) {
 export function GoogleSignInButton({
   label = "Continue with Google",
   className,
+  plan,
   onError,
 }: GoogleSignInButtonProps) {
   const router = useRouter()
@@ -67,6 +69,9 @@ export function GoogleSignInButton({
   const [buttonWidth, setButtonWidth] = React.useState(350)
 
   const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID?.trim()
+
+  const validPlan = plan === "monthly" || plan === "yearly" ? plan : null
+  const targetDestination = validPlan ? `/dashboard/billing?plan=${validPlan}` : "/dashboard"
 
   // Google Identity Services button width must be between 200px and 400px
   React.useEffect(() => {
@@ -85,7 +90,7 @@ export function GoogleSignInButton({
     setLoading(true)
     try {
       const supabase = createClient()
-      const redirectTo = `${window.location.origin}/api/auth/callback?next=/dashboard`
+      const redirectTo = `${window.location.origin}/api/auth/callback?next=${encodeURIComponent(targetDestination)}`
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -112,7 +117,7 @@ export function GoogleSignInButton({
       setLoading(false)
       onError?.("Could not initialize Google authentication. Please try again.")
     }
-  }, [onError])
+  }, [onError, targetDestination])
 
   // 2. Handle ID token from official @react-oauth/google library
   const handleIdTokenSuccess = async (credentialResponse: CredentialResponse) => {
@@ -150,7 +155,7 @@ export function GoogleSignInButton({
         return
       }
 
-      router.push("/dashboard")
+      router.push(targetDestination)
       router.refresh()
     } catch {
       console.warn("Google token exchange error, falling back to OAuth redirect.")

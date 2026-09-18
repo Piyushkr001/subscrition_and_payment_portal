@@ -50,10 +50,10 @@ export default async function DashboardPage(props: DashboardPageProps) {
           <Sparkles className="size-4 text-teal-600 dark:text-teal-400" />
           <div>
             <AlertTitle className="text-sm font-semibold">
-              Payment Received!
+              Checkout completed. We&apos;re confirming your subscription.
             </AlertTitle>
             <AlertDescription className="text-xs text-muted-foreground mt-0.5">
-              Your subscription is being synchronized directly from Stripe. If your status has not yet updated to Active, please refresh the page in a few moments.
+              Stripe webhook state is authoritative. If your status has not yet updated to Active, please refresh the page in a few moments.
             </AlertDescription>
           </div>
         </Alert>
@@ -77,13 +77,23 @@ export default async function DashboardPage(props: DashboardPageProps) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <Button
-            render={<Link href="/dashboard/scores" />}
-            className="rounded-xl shadow-sm"
-          >
-            <PlusCircle className="mr-2 size-4" />
-            Enter Score
-          </Button>
+          {subscription?.isActive ? (
+            <Button
+              render={<Link href="/dashboard/scores" />}
+              className="rounded-xl shadow-sm"
+            >
+              <PlusCircle className="mr-2 size-4" />
+              Enter Score
+            </Button>
+          ) : (
+            <Button
+              render={<Link href="/dashboard/billing" />}
+              className="rounded-xl shadow-sm bg-amber-600 hover:bg-amber-700 text-white"
+            >
+              <CreditCard className="mr-2 size-4" />
+              Activate Membership
+            </Button>
+          )}
         </div>
       </div>
 

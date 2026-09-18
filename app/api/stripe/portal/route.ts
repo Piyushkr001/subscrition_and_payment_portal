@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/auth/get-current-user"
 import { getStripe } from "@/lib/stripe/client"
+import { getAppUrl } from "@/lib/stripe/config"
 import { createAdminClient } from "@/lib/supabase/admin"
 
-export async function POST(request: Request) {
+export async function POST() {
   try {
     const user = await getCurrentUser()
     if (!user) {
@@ -15,38 +16,46 @@ export async function POST(request: Request) {
 
     const supabaseAdmin = createAdminClient()
 
-    // 1. Look up provider_customer_id for this user
-    const { data: subscription } = await supabaseAdmin
-      .from("subscriptions")
-      .select("provider_customer_id")
+    // 1. Look up trusted stripe_customer_id from dedicated mapping table
+    const { data: customerRow } = await supabaseAdmin
+      .from("stripe_customers")
+      .select("stripe_customer_id")
       .eq("user_id", user.id)
-      .not("provider_customer_id", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
       .maybeSingle()
 
-    if (!subscription?.provider_customer_id) {
+    let customerId = customerRow?.stripe_customer_id
+
+    // Fallback: Check historical subscriptions table
+    if (!customerId) {
+      const { data: subscription } = await supabaseAdmin
+        .from("subscriptions")
+        .select("provider_customer_id")
+        .eq("user_id", user.id)
+        .not("provider_customer_id", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      customerId = subscription?.provider_customer_id
+    }
+
+    if (!customerId) {
       return NextResponse.json(
         {
           error:
-            "No active Stripe billing customer found. Please subscribe to a membership first.",
+            "No active Stripe billing customer found for your account. Please subscribe to a membership first.",
         },
         { status: 404 }
       )
     }
 
     const stripe = getStripe()
+    const appUrl = getAppUrl()
 
-    const origin =
-      request.headers.get("origin") ||
-      request.headers.get("referer")?.replace(/\/$/, "") ||
-      process.env.NEXT_PUBLIC_SITE_URL ||
-      "http://localhost:3000"
-
-    // 2. Create Stripe Customer Portal session
+    // 2. Create Stripe Customer Portal session with trusted return URL
     const portalSession = await stripe.billingPortal.sessions.create({
-      customer: subscription.provider_customer_id,
-      return_url: `${origin}/dashboard/settings`,
+      customer: customerId,
+      return_url: `${appUrl}/dashboard/billing`,
     })
 
     return NextResponse.json({ url: portalSession.url }, { status: 200 })

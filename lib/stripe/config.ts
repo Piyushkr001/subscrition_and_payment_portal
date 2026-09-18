@@ -16,14 +16,39 @@ export interface PlanConfig {
   ctaText: string
 }
 
+/**
+ * Resolves trusted application URL for redirects and webhooks.
+ * Priority: APP_URL -> NEXT_PUBLIC_SITE_URL -> http://localhost:3000
+ */
+export function getAppUrl(): string {
+  const rawUrl =
+    process.env.APP_URL ||
+    process.env.NEXT_PUBLIC_SITE_URL ||
+    "http://localhost:3000"
+  return rawUrl.replace(/\/$/, "")
+}
+
+const monthlyAmount = Number(process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_AMOUNT) || 1299
+const yearlyAmount = Number(process.env.NEXT_PUBLIC_STRIPE_YEARLY_PRICE_AMOUNT) || 11999
+const currency = (process.env.NEXT_PUBLIC_STRIPE_CURRENCY || "inr").toLowerCase()
+const currencySymbol = process.env.NEXT_PUBLIC_STRIPE_CURRENCY_SYMBOL || "₹"
+
+// Dynamic savings calculations based on actual configured amounts
+const annualAtMonthlyRate = monthlyAmount * 12
+const annualSavings = Math.max(0, annualAtMonthlyRate - yearlyAmount)
+const savingsPercent = annualAtMonthlyRate > 0
+  ? Math.round((annualSavings / annualAtMonthlyRate) * 100)
+  : 0
+const equivalentMonthlyAmount = Math.round(yearlyAmount / 12)
+
 export const PLANS: Record<PlanId, PlanConfig> = {
   monthly: {
     id: "monthly",
     name: "Monthly Membership",
     period: "/ month",
-    priceAmount: Number(process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_AMOUNT) || 1299,
-    currency: (process.env.NEXT_PUBLIC_STRIPE_CURRENCY || "inr").toLowerCase(),
-    currencySymbol: process.env.NEXT_PUBLIC_STRIPE_CURRENCY_SYMBOL || "₹",
+    priceAmount: monthlyAmount,
+    currency,
+    currencySymbol,
     interval: "month",
     stripePriceId: process.env.STRIPE_MONTHLY_PRICE_ID || "",
     badge: "Flexible",
@@ -42,21 +67,21 @@ export const PLANS: Record<PlanId, PlanConfig> = {
     id: "yearly",
     name: "Annual Membership",
     period: "/ year",
-    priceAmount: Number(process.env.NEXT_PUBLIC_STRIPE_YEARLY_PRICE_AMOUNT) || 11999,
-    currency: (process.env.NEXT_PUBLIC_STRIPE_CURRENCY || "inr").toLowerCase(),
-    currencySymbol: process.env.NEXT_PUBLIC_STRIPE_CURRENCY_SYMBOL || "₹",
+    priceAmount: yearlyAmount,
+    currency,
+    currencySymbol,
     interval: "year",
     stripePriceId: process.env.STRIPE_YEARLY_PRICE_ID || "",
-    badge: "Best Value · Save 20%",
-    subprice: "Equivalent to ~₹999/month",
+    badge: `Best Value · Save ~${savingsPercent}%`,
+    subprice: `Equivalent to ~${currencySymbol}${equivalentMonthlyAmount.toLocaleString("en-IN")}/month`,
     description: "Our most popular membership for committed golfers and regular givers.",
     features: [
       "Everything included in the monthly membership",
       "12 consecutive monthly prize draw entries",
       "Continuous 10%+ charity contribution pledge",
-      "Eligibility for all 5-number jackpot rollovers",
-      "Priority charity impact reporting & certificates",
-      "Best annual rate with 2 months free",
+      "Eligibility for 5-number jackpot rollovers",
+      "Priority charity impact reporting",
+      `Save ~${currencySymbol}${annualSavings.toLocaleString("en-IN")} compared to monthly billing`,
     ],
     ctaText: "Start Annual Plan",
   },
@@ -79,3 +104,4 @@ export function getPlanConfig(planId: string): PlanConfig | null {
   }
   return null
 }
+

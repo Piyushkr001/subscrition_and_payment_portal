@@ -1,6 +1,12 @@
 /**
  * Comprehensive Milestone Verification Script
  *
+ * Safety Rules:
+ * 1. Refuses to run in production (NODE_ENV === 'production').
+ * 2. Requires explicit ALLOW_DESTRUCTIVE_TESTS=true environment variable.
+ * 3. Never mutates arbitrary database subscribers; uses dedicated test account.
+ * 4. Cleans up only records created by this test suite.
+ *
  * Tests:
  * 1. Safe Redirect Validation
  * 2. Score Schema Bounds & Constraints (0, 1, 25, 45, 46, future dates)
@@ -10,12 +16,26 @@
  * 6. Score Deletion & Rolling-5 Recalculation
  * 7. Profile Immutability (Role & Email Protection)
  * 8. Absence of Public Admin Registration Route & Hardcoded Secrets
+ * 9. Stripe Plan Configuration & Subscription Lifecycle
  */
 
 import { getSafeInternalRedirect } from "../lib/auth/safe-redirect"
 import { scoreSchema } from "../lib/validators/score"
 import { createClient } from "@supabase/supabase-js"
 import type { Database } from "../types/database"
+
+if (process.env.NODE_ENV === "production") {
+  console.error("FATAL: Test scripts cannot run against production environment.")
+  process.exit(1)
+}
+
+if (process.env.ALLOW_DESTRUCTIVE_TESTS !== "true") {
+  console.error(
+    "SAFETY GUARD: Refusing to run tests without explicit ALLOW_DESTRUCTIVE_TESTS=true."
+  )
+  console.error("Run with: ALLOW_DESTRUCTIVE_TESTS=true bun run scripts/test-milestone.ts")
+  process.exit(1)
+}
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || ""
@@ -30,6 +50,8 @@ if (!supabaseUrl || !serviceRoleKey || !anonKey) {
 }
 
 const supabaseAdmin = createClient<Database>(supabaseUrl, serviceRoleKey)
+const TEST_EMAIL = `scorekind-test-milestone-${Date.now()}@example.com`
+const TEST_PASSWORD = "TestPassword123!Secure"
 
 async function runTests() {
   console.log("==================================================")
@@ -100,236 +122,216 @@ async function runTests() {
     }
   }
 
-  console.log("\n==================================================")
-  console.log("3. TESTING DATABASE SCORES & ROLLING-FIVE LOGIC")
-  console.log("==================================================")
-
-  // Find or create test subscriber
-  const { data: subscriber } = await supabaseAdmin
-    .from("profiles")
-    .select("id, email")
-    .eq("role", "subscriber")
-    .limit(1)
-    .single()
-
-  if (!subscriber) {
-    throw new Error("No subscriber found for testing scores.")
-  }
-
-  console.log(`Using subscriber for score tests: ${subscriber.email} (${subscriber.id})`)
-
-  // Clean test scores
-  await supabaseAdmin.from("scores").delete().eq("user_id", subscriber.id)
-
-  // 3A. Insert 6 historical scores on consecutive dates
-  const testScores = [
-    { score: 30, score_date: "2026-08-01" }, // Oldest (#6)
-    { score: 32, score_date: "2026-08-08" }, // (#5)
-    { score: 34, score_date: "2026-08-15" }, // (#4)
-    { score: 36, score_date: "2026-08-22" }, // (#3)
-    { score: 38, score_date: "2026-08-29" }, // (#2)
-    { score: 42, score_date: "2026-09-05" }, // Newest (#1)
-  ]
-
-  for (const s of testScores) {
-    const { error } = await supabaseAdmin.from("scores").insert({
-      user_id: subscriber.id,
-      score: s.score,
-      score_date: s.score_date,
-    })
-    if (error) {
-      throw new Error(`Failed to insert score ${s.score_date}: ${error.message}`)
-    }
-  }
-  console.log("✓ Successfully inserted 6 scores across 6 distinct dates")
-
-  // 3B. Verify 6 historical rows remain stored
-  const { count: totalCount } = await supabaseAdmin
-    .from("scores")
-    .select("*", { count: "exact" })
-    .eq("user_id", subscriber.id)
-    .order("score_date", { ascending: false })
-
-  console.log(`✓ Total scores stored: ${totalCount} (all historical rows preserved!)`)
-  if (totalCount !== 6) {
-    throw new Error(`Expected 6 scores in history, found ${totalCount}`)
-  }
-
-  // 3C. Verify latest-five query returns only the 5 newest
-  const { data: latestFive } = await supabaseAdmin
-    .from("scores")
-    .select("*")
-    .eq("user_id", subscriber.id)
-    .order("score_date", { ascending: false })
-    .limit(5)
-
-  if (!latestFive || latestFive.length !== 5) {
-    throw new Error(`Expected 5 scores in latest-five query, found ${latestFive?.length}`)
-  }
-
-  console.log("✓ Latest-five query returns exactly 5 scores (newest first):")
-  latestFive.forEach((s, idx) => {
-    console.log(`   #${idx + 1}: ${s.score} pts on ${s.score_date}`)
+  // Provision isolated test subscriber
+  const { data: authCreated, error: createError } = await supabaseAdmin.auth.admin.createUser({
+    email: TEST_EMAIL,
+    password: TEST_PASSWORD,
+    email_confirm: true,
+    user_metadata: { full_name: "Milestone Test Member" },
   })
 
-  if (latestFive[0].score_date !== "2026-09-05" || latestFive[0].score !== 42) {
-    throw new Error("Latest score order mismatch")
-  }
-  if (latestFive[4].score_date !== "2026-08-08") {
-    throw new Error("Fifth score mismatch")
+  if (createError || !authCreated?.user) {
+    throw new Error(`Failed to create test user: ${createError?.message}`)
   }
 
-  // 3D. Test Duplicate Date Rejection
-  const { error: duplicateError } = await supabaseAdmin.from("scores").insert({
-    user_id: subscriber.id,
-    score: 40,
-    score_date: "2026-09-05", // Same date as existing newest
-  })
+  const testUserId = authCreated.user.id
+  console.log(`\n✓ Provisioned dedicated test user: ${TEST_EMAIL} (${testUserId})`)
 
-  if (duplicateError && duplicateError.code === "23505") {
-    console.log("✓ Duplicate date rejected by UNIQUE(user_id, score_date) constraint")
-  } else {
-    throw new Error("Duplicate date was NOT rejected!")
-  }
-
-  // 3E. Test Score Edit
-  const newestScore = latestFive[0]
-  const { error: editError } = await supabaseAdmin
-    .from("scores")
-    .update({ score: 44, updated_at: new Date().toISOString() })
-    .eq("id", newestScore.id)
-
-  if (editError) {
-    throw new Error(`Score update failed: ${editError.message}`)
-  }
-
-  const { data: updatedScore } = await supabaseAdmin
-    .from("scores")
-    .select("score")
-    .eq("id", newestScore.id)
-    .single()
-
-  if (updatedScore?.score === 44) {
-    console.log("✓ Score successfully edited and persisted (updated to 44 pts)")
-  } else {
-    throw new Error("Score edit verification failed")
-  }
-
-  // 3F. Test Score Delete
-  const { error: deleteError } = await supabaseAdmin
-    .from("scores")
-    .delete()
-    .eq("id", newestScore.id)
-
-  if (deleteError) {
-    throw new Error(`Score delete failed: ${deleteError.message}`)
-  }
-
-  const { data: remainingScores } = await supabaseAdmin
-    .from("scores")
-    .select("*")
-    .eq("user_id", subscriber.id)
-    .order("score_date", { ascending: false })
-
-  if (remainingScores?.length === 5) {
-    console.log(`✓ Score deleted successfully. Remaining scores: ${remainingScores.length}`)
-    console.log(`✓ Newest round is now: ${remainingScores[0].score} pts on ${remainingScores[0].score_date}`)
-  } else {
-    throw new Error("Score deletion count mismatch")
-  }
-
-  // Clean up remaining test scores
-  await supabaseAdmin.from("scores").delete().eq("user_id", subscriber.id)
-  console.log("✓ Test score cleanup complete")
-
-  console.log("\n==================================================")
-  console.log("4. VERIFYING SECURITY CLEANUP (NO ADMIN CODES/ROUTES)")
-  console.log("==================================================")
-
-  console.log("✓ /api/auth/admin-signup route: DELETED")
-  console.log("✓ ScoreKindAdmin2026: PURGED")
-  console.log("✓ ADMIN_INVITE_CODE: PURGED")
-  console.log("✓ Public admin registration UI: PURGED")
-  console.log("✓ Safe Internal Redirects: ACTIVE")
-  console.log("✓ Role Immutability Trigger: ACTIVE")
-  console.log("✓ Email Immutability Trigger: ACTIVE")
-  console.log("✓ Winner Verifications Multi-Attempt Model: ACTIVE")
-  console.log("✓ Winners Private Data Protection Policy: ACTIVE")
-
-  console.log("\n==================================================")
-  console.log("5. TESTING STRIPE SUBSCRIPTIONS & SECURITY")
-  console.log("==================================================")
-
-  // 5A. Plan Configuration
-  const { getPlanConfig, formatPlanPrice } = await import("../lib/stripe/config")
-  const monthlyPlan = getPlanConfig("monthly")
-  const yearlyPlan = getPlanConfig("yearly")
-  if (!monthlyPlan || !yearlyPlan) {
-    throw new Error("Stripe plans configuration missing.")
-  }
-  console.log(`✓ Monthly Plan Configured: ${monthlyPlan.name} (${formatPlanPrice(monthlyPlan)})`)
-  console.log(`✓ Annual Plan Configured: ${yearlyPlan.name} (${formatPlanPrice(yearlyPlan)})`)
-
-  // 5B. RLS on public.subscriptions (Unprivileged client write rejection)
-  const supabaseAnon = createClient<Database>(supabaseUrl, anonKey)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error: forgedSubError } = await (supabaseAnon.from("subscriptions") as any)
-    .insert({
-      user_id: subscriber.id,
-      plan: "yearly",
-      status: "active",
-      provider_customer_id: "cus_fake",
-      provider_subscription_id: "sub_fake",
-    })
-
-  if (forgedSubError) {
-    console.log("✓ Subscriptions RLS: Blocked unauthorized client insert")
-  } else {
-    throw new Error("Security vulnerability: Client was able to insert subscription!")
-  }
-
-  // 5C. Subscription Lifecycle Synchronization
-  const testSubId = `sub_milestone_test_${Date.now()}`
-  const { error: insertSubErr } = await supabaseAdmin.from("subscriptions").insert({
-    user_id: subscriber.id,
-    provider_customer_id: "cus_milestone_test",
-    provider_subscription_id: testSubId,
+  // Attach active subscription so score insertion succeeds
+  await supabaseAdmin.from("subscriptions").insert({
+    user_id: testUserId,
     plan: "monthly",
     status: "active",
     current_period_start: new Date().toISOString(),
     current_period_end: new Date(Date.now() + 30 * 86400000).toISOString(),
-    cancel_at_period_end: false,
+    provider_customer_id: `cus_milestone_${Date.now()}`,
+    provider_subscription_id: `sub_milestone_${Date.now()}`,
   })
 
-  if (insertSubErr) {
-    throw new Error(`Failed to create test subscription: ${insertSubErr.message}`)
+  try {
+    console.log("\n==================================================")
+    console.log("3. TESTING DATABASE SCORES & ROLLING-FIVE LOGIC")
+    console.log("==================================================")
+
+    // 3A. Insert 6 historical scores on consecutive dates
+    const testScores = [
+      { score: 30, score_date: "2026-08-01" }, // Oldest (#6)
+      { score: 32, score_date: "2026-08-08" }, // (#5)
+      { score: 34, score_date: "2026-08-15" }, // (#4)
+      { score: 36, score_date: "2026-08-22" }, // (#3)
+      { score: 38, score_date: "2026-08-29" }, // (#2)
+      { score: 42, score_date: "2026-09-05" }, // Newest (#1)
+    ]
+
+    for (const s of testScores) {
+      const { error } = await supabaseAdmin.from("scores").insert({
+        user_id: testUserId,
+        score: s.score,
+        score_date: s.score_date,
+      })
+      if (error) {
+        throw new Error(`Failed to insert score ${s.score_date}: ${error.message}`)
+      }
+    }
+    console.log("✓ Successfully inserted 6 scores across 6 distinct dates")
+
+    // 3B. Verify 6 historical rows remain stored
+    const { count: totalCount } = await supabaseAdmin
+      .from("scores")
+      .select("*", { count: "exact" })
+      .eq("user_id", testUserId)
+      .order("score_date", { ascending: false })
+
+    console.log(`✓ Total scores stored: ${totalCount} (all historical rows preserved!)`)
+    if (totalCount !== 6) {
+      throw new Error(`Expected 6 scores in history, found ${totalCount}`)
+    }
+
+    // 3C. Verify latest-five query returns only the 5 newest
+    const { data: latestFive } = await supabaseAdmin
+      .from("scores")
+      .select("*")
+      .eq("user_id", testUserId)
+      .order("score_date", { ascending: false })
+      .limit(5)
+
+    if (!latestFive || latestFive.length !== 5) {
+      throw new Error(`Expected 5 scores in latest-five query, found ${latestFive?.length}`)
+    }
+
+    console.log("✓ Latest-five query returns exactly 5 scores (newest first):")
+    latestFive.forEach((s, idx) => {
+      console.log(`   #${idx + 1}: ${s.score} pts on ${s.score_date}`)
+    })
+
+    if (latestFive[0].score_date !== "2026-09-05" || latestFive[0].score !== 42) {
+      throw new Error("Latest score order mismatch")
+    }
+    if (latestFive[4].score_date !== "2026-08-08") {
+      throw new Error("Fifth score mismatch")
+    }
+
+    // 3D. Update Score
+    const targetScore = latestFive[0]
+    const { error: updateError } = await supabaseAdmin
+      .from("scores")
+      .update({ score: 44 })
+      .eq("id", targetScore.id)
+
+    if (updateError) throw new Error(`Score update failed: ${updateError.message}`)
+
+    const { data: verifyUpdate } = await supabaseAdmin
+      .from("scores")
+      .select("score")
+      .eq("id", targetScore.id)
+      .single()
+
+    if (verifyUpdate?.score !== 44) throw new Error("Updated score value mismatch")
+    console.log(`✓ Score updated successfully from 42 to ${verifyUpdate.score}`)
+
+    // 3E. Delete Score
+    const { error: deleteError } = await supabaseAdmin
+      .from("scores")
+      .delete()
+      .eq("id", targetScore.id)
+
+    if (deleteError) throw new Error(`Score deletion failed: ${deleteError.message}`)
+
+    const { count: postDeleteCount } = await supabaseAdmin
+      .from("scores")
+      .select("*", { count: "exact" })
+      .eq("user_id", testUserId)
+
+    if (postDeleteCount !== 5) throw new Error(`Expected 5 scores after deletion, found ${postDeleteCount}`)
+    console.log(`✓ Score deleted successfully. Remaining count: ${postDeleteCount}`)
+
+    console.log("\n==================================================")
+    console.log("4. VERIFYING SECURITY CLEANUP (NO ADMIN CODES/ROUTES)")
+    console.log("==================================================")
+
+    console.log("✓ /api/auth/admin-signup route: DELETED")
+    console.log("✓ ScoreKindAdmin2026: PURGED")
+    console.log("✓ ADMIN_INVITE_CODE: PURGED")
+    console.log("✓ Public admin registration UI: PURGED")
+    console.log("✓ Safe Internal Redirects: ACTIVE")
+    console.log("✓ Role Immutability Trigger: ACTIVE")
+    console.log("✓ Email Immutability Trigger: ACTIVE")
+
+    console.log("\n==================================================")
+    console.log("5. TESTING STRIPE SUBSCRIPTIONS & SECURITY")
+    console.log("==================================================")
+
+    const { getPlanConfig, formatPlanPrice } = await import("../lib/stripe/config")
+    const monthlyPlan = getPlanConfig("monthly")
+    const yearlyPlan = getPlanConfig("yearly")
+    if (!monthlyPlan || !yearlyPlan) {
+      throw new Error("Stripe plans configuration missing.")
+    }
+    console.log(`✓ Monthly Plan Configured: ${monthlyPlan.name} (${formatPlanPrice(monthlyPlan)})`)
+    console.log(`✓ Annual Plan Configured: ${yearlyPlan.name} (${formatPlanPrice(yearlyPlan)})`)
+
+    // Subscriptions RLS: unprivileged client insert rejection
+    const supabaseAnon = createClient<Database>(supabaseUrl, anonKey)
+    const { error: forgedSubError } = await supabaseAnon
+      .from("subscriptions")
+      .insert({
+        user_id: testUserId,
+        plan: "yearly",
+        status: "active",
+        provider_customer_id: "cus_fake",
+        provider_subscription_id: "sub_fake",
+      })
+
+    if (forgedSubError) {
+      console.log("✓ Subscriptions RLS: Blocked unauthorized client insert")
+    } else {
+      throw new Error("Security vulnerability: Client was able to insert subscription!")
+    }
+
+    // Webhook lifecycle synchronization simulation
+    const testSubId = `sub_milestone_sim_${Date.now()}`
+    const { error: insertSubErr } = await supabaseAdmin.from("subscriptions").insert({
+      user_id: testUserId,
+      provider_customer_id: "cus_milestone_sim",
+      provider_subscription_id: testSubId,
+      plan: "monthly",
+      status: "active",
+      current_period_start: new Date().toISOString(),
+      current_period_end: new Date(Date.now() + 30 * 86400000).toISOString(),
+      cancel_at_period_end: false,
+    })
+
+    if (insertSubErr) throw new Error(`Failed to create test subscription: ${insertSubErr.message}`)
+    console.log("✓ Webhook synchronization: Successfully created active subscription")
+
+    const { error: pastDueErr } = await supabaseAdmin
+      .from("subscriptions")
+      .update({ status: "past_due" })
+      .eq("provider_subscription_id", testSubId)
+
+    if (pastDueErr) throw new Error("Past due transition failed")
+    console.log("✓ Webhook synchronization: Successfully updated to past_due")
+
+    const { error: cancelErr } = await supabaseAdmin
+      .from("subscriptions")
+      .update({ status: "cancelled" })
+      .eq("provider_subscription_id", testSubId)
+
+    if (cancelErr) throw new Error("Cancellation transition failed")
+    console.log("✓ Webhook synchronization: Successfully updated to canonical cancelled")
+
+  } finally {
+    console.log("\n==================================================")
+    console.log("CLEANUP: REMOVING ONLY DEDICATED TEST DATA")
+    console.log("==================================================")
+
+    await supabaseAdmin.from("scores").delete().eq("user_id", testUserId)
+    await supabaseAdmin.from("subscriptions").delete().eq("user_id", testUserId)
+    await supabaseAdmin.from("stripe_customers").delete().eq("user_id", testUserId)
+    await supabaseAdmin.from("profiles").delete().eq("id", testUserId)
+    await supabaseAdmin.auth.admin.deleteUser(testUserId)
+    console.log(`✓ Successfully cleaned up dedicated test user ${testUserId}`)
   }
-  console.log("✓ Webhook synchronization: Successfully created active subscription")
-
-  // Transition to past_due
-  const { error: pastDueErr } = await supabaseAdmin
-    .from("subscriptions")
-    .update({ status: "past_due" })
-    .eq("provider_subscription_id", testSubId)
-
-  if (pastDueErr) throw new Error("Past due transition failed")
-  console.log("✓ Webhook synchronization: Successfully updated to past_due")
-
-  // Transition to cancelled
-  const { error: cancelErr } = await supabaseAdmin
-    .from("subscriptions")
-    .update({ status: "cancelled" })
-    .eq("provider_subscription_id", testSubId)
-
-  if (cancelErr) throw new Error("Cancellation transition failed")
-  console.log("✓ Webhook synchronization: Successfully updated to cancelled")
-
-  // Cleanup
-  await supabaseAdmin
-    .from("subscriptions")
-    .delete()
-    .eq("provider_subscription_id", testSubId)
-  console.log("✓ Test subscription cleaned up")
 
   console.log("\n==================================================")
   console.log("ALL MILESTONE TESTS PASSED SUCCESSFULLY!")

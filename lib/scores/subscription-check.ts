@@ -26,21 +26,22 @@ export interface UserSubscriptionDetails {
 
 /**
  * Retrieve current user's active or latest subscription details from PostgreSQL.
+ * Deterministically prioritizes active/trialing subscriptions with valid period dates
+ * rather than naively picking the newest created row.
  */
 export async function getUserSubscription(userId: string): Promise<UserSubscriptionDetails | null> {
   if (!userId) return null
 
   const supabase = await createClient()
 
-  const { data: subscription, error } = await supabase
+  // 1. Query all subscriptions for user to resolve deterministic current state
+  const { data: userSubs, error } = await supabase
     .from("subscriptions")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
 
-  if (error || !subscription) {
+  if (error || !userSubs || userSubs.length === 0) {
     return {
       userId,
       status: "none",
@@ -49,20 +50,37 @@ export async function getUserSubscription(userId: string): Promise<UserSubscript
     }
   }
 
+  const nowIso = new Date().toISOString()
+
+  // 2. Deterministic priority resolution:
+  // Priority A: Active or trialing subscription with valid period date
+  const activeSub = userSubs.find(
+    (s) =>
+      (s.status === "active" || s.status === "trialing") &&
+      (!s.current_period_end || s.current_period_end > nowIso)
+  )
+
+  // Priority B: Past-due subscription needing billing recovery
+  const pastDueSub = userSubs.find((s) => s.status === "past_due")
+
+  // Priority C: Most recently updated/created subscription row
+  const currentSub = activeSub || pastDueSub || userSubs[0]
+
   const isActive =
-    subscription.status === "active" || subscription.status === "trialing"
+    (currentSub.status === "active" || currentSub.status === "trialing") &&
+    (!currentSub.current_period_end || currentSub.current_period_end > nowIso)
 
   return {
-    id: subscription.id,
-    userId: subscription.user_id,
-    providerCustomerId: subscription.provider_customer_id,
-    providerSubscriptionId: subscription.provider_subscription_id,
-    stripePriceId: subscription.stripe_price_id,
-    plan: subscription.plan,
-    status: (subscription.status as SubscriptionStatus) || "none",
-    currentPeriodStart: subscription.current_period_start,
-    currentPeriodEnd: subscription.current_period_end,
-    cancelAtPeriodEnd: subscription.cancel_at_period_end || false,
+    id: currentSub.id,
+    userId: currentSub.user_id,
+    providerCustomerId: currentSub.provider_customer_id,
+    providerSubscriptionId: currentSub.provider_subscription_id,
+    stripePriceId: currentSub.stripe_price_id,
+    plan: currentSub.plan,
+    status: (currentSub.status as SubscriptionStatus) || "none",
+    currentPeriodStart: currentSub.current_period_start,
+    currentPeriodEnd: currentSub.current_period_end,
+    cancelAtPeriodEnd: currentSub.cancel_at_period_end || false,
     isActive,
   }
 }

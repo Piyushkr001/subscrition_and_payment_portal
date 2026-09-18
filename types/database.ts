@@ -13,7 +13,6 @@ export type SubscriptionStatus =
   | "trialing"
   | "past_due"
   | "cancelled"
-  | "canceled"
   | "unpaid"
   | "expired"
   | "incomplete"
@@ -77,6 +76,7 @@ export interface Database {
           current_period_start: string | null
           current_period_end: string | null
           cancel_at_period_end: boolean
+          last_stripe_event_timestamp: number | null
           created_at: string
           updated_at: string
         }
@@ -91,6 +91,7 @@ export interface Database {
           current_period_start?: string | null
           current_period_end?: string | null
           cancel_at_period_end?: boolean
+          last_stripe_event_timestamp?: number | null
           created_at?: string
           updated_at?: string
         }
@@ -105,8 +106,79 @@ export interface Database {
           current_period_start?: string | null
           current_period_end?: string | null
           cancel_at_period_end?: boolean
+          last_stripe_event_timestamp?: number | null
           created_at?: string
           updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "subscriptions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      stripe_customers: {
+        Row: {
+          id: string
+          user_id: string
+          stripe_customer_id: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          stripe_customer_id: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          stripe_customer_id?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "stripe_customers_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: true
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      stripe_webhook_events: {
+        Row: {
+          id: string
+          stripe_event_id: string
+          event_type: string
+          status: "processing" | "processed" | "failed"
+          error_message: string | null
+          created_at: string
+          processed_at: string | null
+        }
+        Insert: {
+          id?: string
+          stripe_event_id: string
+          event_type: string
+          status: "processing" | "processed" | "failed"
+          error_message?: string | null
+          created_at?: string
+          processed_at?: string | null
+        }
+        Update: {
+          id?: string
+          stripe_event_id?: string
+          event_type?: string
+          status?: "processing" | "processed" | "failed"
+          error_message?: string | null
+          created_at?: string
+          processed_at?: string | null
         }
         Relationships: []
       }
@@ -135,7 +207,15 @@ export interface Database {
           created_at?: string
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "scores_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          }
+        ]
       }
       charities: {
         Row: {

@@ -54,6 +54,10 @@ export function PricingSection() {
       const data = await res.json()
 
       if (!res.ok || !data.url) {
+        if (data.code === "ACTIVE_SUBSCRIPTION_EXISTS" || data.portalAvailable) {
+          router.push("/dashboard/billing")
+          return
+        }
         throw new Error(data.error || "Failed to start checkout session.")
       }
 
@@ -100,7 +104,7 @@ export function PricingSection() {
 
           <p className="mt-4 max-w-2xl text-base text-muted-foreground sm:text-lg">
             Choose the membership that fits your playing cadence. Every plan includes
-            score tracking, monthly draws, and guaranteed charity donations.
+            score tracking, monthly draws, and charitable contribution selection.
           </p>
 
           {errorMessage && (
@@ -134,7 +138,7 @@ export function PricingSection() {
               >
                 <span>Annual Billing</span>
                 <span className="rounded-md bg-teal-500/20 px-1.5 py-0.5 text-[10px] font-bold text-teal-800 dark:text-teal-300">
-                  Save 20%
+                  {PLANS.yearly.badge || "Best Value"}
                 </span>
               </Button>
             </div>
@@ -224,7 +228,7 @@ export function PricingSection() {
                   )}
                 </Button>
                 <p className="mt-2.5 text-center text-[11px] text-muted-foreground">
-                  No hidden fees · 10%+ charity guarantee
+                  No hidden fees · 10%+ pledged to chosen charity
                 </p>
               </div>
             </Card>

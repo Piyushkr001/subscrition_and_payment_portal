@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/auth/get-current-user"
 import { getStripe } from "@/lib/stripe/client"
-import { getPlanConfig, type PlanId } from "@/lib/stripe/config"
+import { getPlanConfig, getAppUrl, type PlanId } from "@/lib/stripe/config"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { getUserSubscription } from "@/lib/scores/subscription-check"
 
 export async function POST(request: Request) {
   try {
+    // 1. Authenticate user strictly via verified Supabase session
     const user = await getCurrentUser()
     if (!user) {
       return NextResponse.json(
@@ -14,13 +16,54 @@ export async function POST(request: Request) {
       )
     }
 
+    // 2. Validate requested plan identifier (strictly 'monthly' | 'yearly', reject arbitrary client priceId)
     const body = await request.json().catch(() => ({}))
     const planId = body.plan as PlanId
 
-    const planConfig = getPlanConfig(planId)
-    if (!planConfig) {
+    if (planId !== "monthly" && planId !== "yearly") {
       return NextResponse.json(
         { error: "Invalid membership plan selected. Please choose 'monthly' or 'yearly'." },
+        { status: 400 }
+      )
+    }
+
+    const planConfig = getPlanConfig(planId)
+    if (!planConfig || !planConfig.stripePriceId) {
+      console.error(
+        `[Stripe Checkout Error]: Missing configured Stripe Price ID for plan '${planId}'.`
+      )
+      return NextResponse.json(
+        {
+          error:
+            "Subscription configuration error. Required Stripe Price ID is not set on the server.",
+        },
+        { status: 500 }
+      )
+    }
+
+    // 3. Duplicate Subscription Prevention: Check user's current subscription status
+    const currentSub = await getUserSubscription(user.id)
+
+    if (currentSub?.isActive) {
+      return NextResponse.json(
+        {
+          error:
+            "An active subscription already exists for your account. Please manage your existing membership via the Billing Portal.",
+          code: "ACTIVE_SUBSCRIPTION_EXISTS",
+          portalAvailable: true,
+        },
+        { status: 409 }
+      )
+    }
+
+    if (currentSub?.status === "past_due") {
+      return NextResponse.json(
+        {
+          error:
+            "Your subscription payment is past due. Please update your payment method in the Billing Portal to reactivate your membership.",
+          code: "PAST_DUE_SUBSCRIPTION",
+          portalAvailable: !!currentSub.providerCustomerId,
+        },
         { status: 400 }
       )
     }
@@ -28,20 +71,24 @@ export async function POST(request: Request) {
     const stripe = getStripe()
     const supabaseAdmin = createAdminClient()
 
-    // 1. Check if user already has an existing provider_customer_id
-    const { data: existingSub } = await supabaseAdmin
-      .from("subscriptions")
-      .select("provider_customer_id")
+    // 4. Resolve or create 1:1 Stripe Customer mapping (prevents duplicate abandoned customers)
+    let customerId: string | null = null
+
+    const { data: customerRow, error: customerQueryError } = await supabaseAdmin
+      .from("stripe_customers")
+      .select("stripe_customer_id")
       .eq("user_id", user.id)
-      .not("provider_customer_id", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
       .maybeSingle()
 
-    let customerId = existingSub?.provider_customer_id
+    if (customerQueryError) {
+      console.error("[Stripe Checkout]: Error querying stripe_customers:", customerQueryError)
+      throw customerQueryError
+    }
 
-    // 2. If no customer ID exists, create one in Stripe
-    if (!customerId) {
+    if (customerRow?.stripe_customer_id) {
+      customerId = customerRow.stripe_customer_id
+    } else {
+      // Create new customer in Stripe
       const customer = await stripe.customers.create({
         email: user.email,
         metadata: {
@@ -49,95 +96,54 @@ export async function POST(request: Request) {
         },
       })
       customerId = customer.id
+
+      // Persist mapping immediately into stripe_customers
+      const { error: persistCustomerError } = await supabaseAdmin
+        .from("stripe_customers")
+        .insert({
+          user_id: user.id,
+          stripe_customer_id: customerId,
+        })
+
+      if (persistCustomerError) {
+        console.error(
+          "[Stripe Checkout]: Failed to persist stripe_customer mapping for user:",
+          persistCustomerError
+        )
+        throw persistCustomerError
+      }
     }
 
-    // 3. Resolve origin for safe callback redirects
-    const origin =
-      request.headers.get("origin") ||
-      request.headers.get("referer")?.replace(/\/$/, "") ||
-      process.env.NEXT_PUBLIC_SITE_URL ||
-      "http://localhost:3000"
-
-    // 4. Construct line items (use pre-created price ID if available, else dynamic recurring price_data)
-    const getDynamicLineItems = () => [
+    // 5. Build line items using strictly validated server-side Price ID (no dynamic price_data fallback)
+    const lineItems = [
       {
-        price_data: {
-          currency: planConfig.currency,
-          unit_amount: planConfig.priceAmount * 100, // Stripe expects amount in smallest currency unit (e.g. paise / cents)
-          recurring: {
-            interval: planConfig.interval,
-          },
-          product_data: {
-            name: `ScoreKind ${planConfig.name}`,
-            description: planConfig.description,
-          },
-        },
+        price: planConfig.stripePriceId,
         quantity: 1,
       },
     ]
 
-    let lineItems = planConfig.stripePriceId
-      ? [
-          {
-            price: planConfig.stripePriceId,
-            quantity: 1,
-          },
-        ]
-      : getDynamicLineItems()
+    const appUrl = getAppUrl()
 
-    // 5. Create Stripe Checkout Session with fallback resilience
-    let session
-    try {
-      session = await stripe.checkout.sessions.create({
-        mode: "subscription",
-        customer: customerId,
-        line_items: lineItems,
-        success_url: `${origin}/dashboard?checkout_success=true&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${origin}/#pricing`,
+    // 6. Create Stripe Checkout Session
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer: customerId,
+      line_items: lineItems,
+      success_url: `${appUrl}/dashboard/billing?checkout_success=true&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${appUrl}/dashboard/billing?checkout=cancelled`,
+      metadata: {
+        userId: user.id,
+        plan: planConfig.id,
+      },
+      subscription_data: {
         metadata: {
           userId: user.id,
           plan: planConfig.id,
         },
-        subscription_data: {
-          metadata: {
-            userId: user.id,
-            plan: planConfig.id,
-          },
-        },
-        allow_promotion_codes: true,
-        billing_address_collection: "auto",
-      })
-    } catch (checkoutErr: unknown) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const err = checkoutErr as any
-      if (err?.code === "resource_missing" && planConfig.stripePriceId) {
-        console.warn(
-          `[Stripe Checkout]: Configured price ID '${planConfig.stripePriceId}' was not found in Stripe account. Falling back to dynamic recurring price_data.`
-        )
-        lineItems = getDynamicLineItems()
-        session = await stripe.checkout.sessions.create({
-          mode: "subscription",
-          customer: customerId,
-          line_items: lineItems,
-          success_url: `${origin}/dashboard?checkout_success=true&session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${origin}/#pricing`,
-          metadata: {
-            userId: user.id,
-            plan: planConfig.id,
-          },
-          subscription_data: {
-            metadata: {
-              userId: user.id,
-              plan: planConfig.id,
-            },
-          },
-          allow_promotion_codes: true,
-          billing_address_collection: "auto",
-        })
-      } else {
-        throw checkoutErr
-      }
-    }
+      },
+      allow_promotion_codes: true,
+      billing_address_collection: "auto",
+    })
 
     if (!session.url) {
       return NextResponse.json(

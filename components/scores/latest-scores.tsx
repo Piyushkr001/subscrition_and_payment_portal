@@ -6,10 +6,11 @@ import type { Score } from "@/lib/scores/types"
 
 interface LatestScoresProps {
   scores: Score[]
+  canManage?: boolean
   onAddScore: () => void
 }
 
-export function LatestScores({ scores, onAddScore }: LatestScoresProps) {
+export function LatestScores({ scores, canManage = true, onAddScore }: LatestScoresProps) {
   const count = scores.length
   const isComplete = count >= 5
   const remaining = Math.max(0, 5 - count)
@@ -60,8 +61,14 @@ export function LatestScores({ scores, onAddScore }: LatestScoresProps) {
             <button
               key={`empty-slot-${i}`}
               type="button"
-              onClick={onAddScore}
-              className="flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-border/80 bg-muted/20 p-5 text-center transition-all hover:border-primary/50 hover:bg-muted/40 group"
+              onClick={canManage ? onAddScore : undefined}
+              disabled={!canManage}
+              title={canManage ? "Click to add round" : "Active membership required to add round"}
+              className={`flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-border/80 bg-muted/20 p-5 text-center transition-all ${
+                canManage
+                  ? "hover:border-primary/50 hover:bg-muted/40 cursor-pointer group"
+                  : "opacity-60 cursor-not-allowed"
+              }`}
             >
               <div className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground group-hover:bg-primary/10 group-hover:text-primary transition-colors">
                 <Plus className="size-5" />
@@ -70,7 +77,7 @@ export function LatestScores({ scores, onAddScore }: LatestScoresProps) {
                 Slot #{slotNumber}
               </span>
               <span className="text-[11px] text-muted-foreground mt-0.5">
-                Click to add round
+                {canManage ? "Click to add round" : "Membership required"}
               </span>
             </button>
           )

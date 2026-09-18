@@ -61,7 +61,7 @@ export function ScoresClient({
             <Button
               size="sm"
               className="bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs shrink-0 self-start sm:self-center gap-1.5"
-              render={<Link href="/#pricing" />}
+              render={<Link href="/dashboard/billing" />}
             >
               <span>Activate Membership</span>
               <ArrowRight className="size-3.5" />
@@ -92,11 +92,11 @@ export function ScoresClient({
             </Button>
           ) : (
             <Button
-              className="gap-2 font-semibold shadow-sm opacity-80"
-              render={<Link href="/#pricing" />}
+              className="gap-2 font-semibold shadow-sm bg-amber-600 hover:bg-amber-700 text-white"
+              render={<Link href="/dashboard/billing" />}
             >
               <Plus className="size-4" />
-              Add Score (Subscribe)
+              Add Score (Membership Required)
             </Button>
           )}
         </div>
@@ -104,12 +104,13 @@ export function ScoresClient({
 
       {/* 2. Main Content: Empty State vs. Active Scores */}
       {initialScores.length === 0 ? (
-        <ScoreEmptyState onAddScore={() => canManage ? setIsAddOpen(true) : router.push("/#pricing")} />
+        <ScoreEmptyState onAddScore={() => canManage ? setIsAddOpen(true) : router.push("/dashboard/billing")} />
       ) : (
         <div className="space-y-8">
           {/* Latest 5 Scores Cards */}
           <LatestScores
             scores={latestFive}
+            canManage={canManage}
             onAddScore={() => setIsAddOpen(true)}
           />
 
@@ -143,6 +144,7 @@ export function ScoresClient({
           {/* Complete Score History Table/Cards */}
           <ScoreHistory
             scores={initialScores}
+            canManage={canManage}
             onEdit={(score) => setEditingScore(score)}
             onDelete={(score) => setDeletingScore(score)}
           />

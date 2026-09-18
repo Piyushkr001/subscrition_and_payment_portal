@@ -24,6 +24,7 @@ import type { Score } from "@/lib/scores/types"
 
 interface ScoreHistoryProps {
   scores: Score[]
+  canManage?: boolean
   onEdit: (score: Score) => void
   onDelete: (score: Score) => void
 }
@@ -41,7 +42,7 @@ function formatRecordedAt(isoString: string): string {
   }
 }
 
-export function ScoreHistory({ scores, onEdit, onDelete }: ScoreHistoryProps) {
+export function ScoreHistory({ scores, canManage = true, onEdit, onDelete }: ScoreHistoryProps) {
   const [page, setPage] = React.useState(1)
   const pageSize = 10
 
@@ -141,8 +142,10 @@ export function ScoreHistory({ scores, onEdit, onDelete }: ScoreHistoryProps) {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => onEdit(score)}
-                          className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground"
+                          disabled={!canManage}
+                          onClick={() => canManage && onEdit(score)}
+                          title={!canManage ? "Active membership required to edit scores" : undefined}
+                          className="h-8 gap-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
                           aria-label={`Edit score of ${score.score_date}`}
                         >
                           <Edit className="size-3.5" />
@@ -152,8 +155,10 @@ export function ScoreHistory({ scores, onEdit, onDelete }: ScoreHistoryProps) {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => onDelete(score)}
-                          className="h-8 gap-1 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          disabled={!canManage}
+                          onClick={() => canManage && onDelete(score)}
+                          title={!canManage ? "Active membership required to delete scores" : undefined}
+                          className="h-8 gap-1 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive disabled:opacity-40 disabled:cursor-not-allowed"
                           aria-label={`Delete score of ${score.score_date}`}
                         >
                           <Trash2 className="size-3.5" />
@@ -214,8 +219,10 @@ export function ScoreHistory({ scores, onEdit, onDelete }: ScoreHistoryProps) {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => onEdit(score)}
-                    className="h-8 gap-1.5 text-xs"
+                    disabled={!canManage}
+                    onClick={() => canManage && onEdit(score)}
+                    title={!canManage ? "Active membership required to edit scores" : undefined}
+                    className="h-8 gap-1.5 text-xs disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Edit className="size-3.5" />
                     Edit
@@ -223,8 +230,10 @@ export function ScoreHistory({ scores, onEdit, onDelete }: ScoreHistoryProps) {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => onDelete(score)}
-                    className="h-8 gap-1.5 text-xs text-destructive border-destructive/30 hover:bg-destructive/10"
+                    disabled={!canManage}
+                    onClick={() => canManage && onDelete(score)}
+                    title={!canManage ? "Active membership required to delete scores" : undefined}
+                    className="h-8 gap-1.5 text-xs text-destructive border-destructive/30 hover:bg-destructive/10 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Trash2 className="size-3.5" />
                     Delete

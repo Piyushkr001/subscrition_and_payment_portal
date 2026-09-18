@@ -38,6 +38,8 @@ function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const rawRedirectTo = searchParams.get("redirectTo")
+  const rawPlan = searchParams.get("plan")
+  const plan = rawPlan === "monthly" || rawPlan === "yearly" ? rawPlan : null
   const signupSuccess = searchParams.get("signup") === "success"
   const authErrorParam = searchParams.get("error")
 
@@ -95,7 +97,8 @@ function LoginForm() {
           : "/admin"
         router.push(safeDestination)
       } else {
-        const safeDestination = getSafeInternalRedirect(rawRedirectTo, "/dashboard")
+        const defaultTarget = plan ? `/dashboard/billing?plan=${plan}` : "/dashboard"
+        const safeDestination = getSafeInternalRedirect(rawRedirectTo, defaultTarget)
         router.push(safeDestination)
       }
       router.refresh()
@@ -179,6 +182,7 @@ function LoginForm() {
           <div className="mb-5 space-y-4">
             <GoogleSignInButton
               label="Sign in with Google"
+              plan={plan || undefined}
               onError={(err) => setErrorMessage(err)}
             />
 
@@ -271,7 +275,7 @@ function LoginForm() {
           <p className="text-sm text-muted-foreground">
             Don&apos;t have an account yet?{" "}
             <Link
-              href="/signup"
+              href={plan ? `/signup?plan=${plan}` : "/signup"}
               className="font-medium text-primary underline-offset-4 hover:underline"
             >
               Join ScoreKind

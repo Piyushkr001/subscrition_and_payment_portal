@@ -3,25 +3,37 @@ import type Stripe from "stripe"
 import { getStripe } from "@/lib/stripe/client"
 import { createAdminClient } from "@/lib/supabase/admin"
 import { syncSubscriptionFromStripe } from "@/lib/stripe/sync-subscription"
+import { recordCharityAllocationFromInvoice } from "@/lib/charity/record-contribution"
 import type { SubscriptionPlan } from "@/types/database"
 
 function extractInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rawInvoice = invoice as any
+  const rawInvoice = invoice as unknown as Record<string, unknown>
+  const sub = rawInvoice.subscription
+  if (typeof sub === "string") {
+    return sub
+  }
+  if (sub && typeof sub === "object" && "id" in sub) {
+    return (sub as { id: string }).id
+  }
 
-  if (typeof rawInvoice.subscription === "string") {
-    return rawInvoice.subscription
+  const parent = rawInvoice.parent as Record<string, unknown> | undefined
+  const subDetails = parent?.subscription_details as Record<string, unknown> | undefined
+  if (typeof subDetails?.subscription === "string") {
+    return subDetails.subscription
   }
-  if (rawInvoice.subscription?.id) {
-    return rawInvoice.subscription.id
+
+  const lines = invoice.lines?.data
+  if (lines && lines.length > 0) {
+    const rawLine = lines[0] as unknown as Record<string, unknown>
+    const lineSub = rawLine.subscription
+    if (typeof lineSub === "string") {
+      return lineSub
+    }
+    if (lineSub && typeof lineSub === "object" && "id" in lineSub) {
+      return (lineSub as { id: string }).id
+    }
   }
-  if (typeof rawInvoice.parent?.subscription_details?.subscription === "string") {
-    return rawInvoice.parent.subscription_details.subscription
-  }
-  if (rawInvoice.lines?.data?.[0]?.subscription) {
-    const lineSub = rawInvoice.lines.data[0].subscription
-    return typeof lineSub === "string" ? lineSub : lineSub.id || null
-  }
+
   return null
 }
 
@@ -59,41 +71,33 @@ export async function POST(request: Request) {
 
   const supabaseAdmin = createAdminClient()
 
-  // 1. Check idempotency: Return 200 immediately if this event ID was already successfully processed
+  // 1. Atomic event claiming via PostgreSQL RPC (Concurrency-safe and idempotent)
   try {
-    const { data: existingEvent, error: checkEventError } = await supabaseAdmin
-      .from("stripe_webhook_events")
-      .select("status")
-      .eq("stripe_event_id", event.id)
-      .maybeSingle()
+    const { data: claimRows, error: claimRpcError } = await supabaseAdmin.rpc(
+      "claim_stripe_webhook_event",
+      {
+        p_event_id: event.id,
+        p_event_type: event.type,
+      }
+    )
 
-    if (checkEventError) {
-      console.error("[Stripe Webhook]: Error checking event idempotency:", checkEventError)
-      // Throw to return 500 so Stripe retries
-      throw checkEventError
+    if (claimRpcError) {
+      console.error("[Stripe Webhook]: Error claiming event via RPC:", claimRpcError)
+      throw claimRpcError
     }
 
-    if (existingEvent?.status === "processed") {
+    const claim = claimRows?.[0]
+
+    // Acknowledge duplicates immediately
+    if (claim?.already_processed) {
       console.log(`[Stripe Webhook]: Duplicate event ${event.id} already processed. Acknowledging with 200.`)
       return NextResponse.json({ received: true, duplicate: true }, { status: 200 })
     }
 
-    // Record or update event status as 'processing'
-    const { error: upsertEventError } = await supabaseAdmin
-      .from("stripe_webhook_events")
-      .upsert(
-        {
-          stripe_event_id: event.id,
-          event_type: event.type,
-          status: "processing",
-          created_at: new Date().toISOString(),
-        },
-        { onConflict: "stripe_event_id" }
-      )
-
-    if (upsertEventError) {
-      console.error("[Stripe Webhook]: Error recording event processing status:", upsertEventError)
-      throw upsertEventError
+    // If another concurrent execution is actively working on it, acknowledge so it does not collide
+    if (!claim?.claimed) {
+      console.log(`[Stripe Webhook]: Event ${event.id} is actively being processed by a concurrent thread.`)
+      return NextResponse.json({ received: true, in_progress: true }, { status: 200 })
     }
   } catch (idempotencyErr) {
     console.error("[Stripe Webhook Idempotency Error]:", idempotencyErr)
@@ -103,7 +107,7 @@ export async function POST(request: Request) {
     )
   }
 
-  // 2. Process event with centralized subscription synchronizer
+  // 2. Process event with centralized subscription synchronizer and charity allocation
   try {
     switch (event.type) {
       case "checkout.session.completed": {
@@ -171,12 +175,21 @@ export async function POST(request: Request) {
         const subscriptionId = extractInvoiceSubscriptionId(invoice)
 
         if (subscriptionId) {
-          // Do not blindly set active; fetch actual Stripe subscription state and sync
+          // Retrieve actual subscription state from Stripe and synchronize
           const subscription = await stripe.subscriptions.retrieve(subscriptionId)
-          await syncSubscriptionFromStripe(subscription, {
+          const syncResult = await syncSubscriptionFromStripe(subscription, {
             eventTimestamp: event.created,
           })
           console.log(`[Stripe Webhook]: Handled invoice.payment_succeeded for sub ${subscriptionId}`)
+
+          // Record charitable allocation for this paid invoice
+          if (invoice.amount_paid && invoice.amount_paid > 0) {
+            await recordCharityAllocationFromInvoice(
+              invoice,
+              syncResult.userId,
+              syncResult.subscriptionId
+            )
+          }
         }
         break
       }
@@ -212,7 +225,8 @@ export async function POST(request: Request) {
       .eq("stripe_event_id", event.id)
 
     if (markProcessedError) {
-      console.warn("[Stripe Webhook]: Could not mark event as processed:", markProcessedError)
+      console.error("[Stripe Webhook]: Critical failure marking event as processed:", markProcessedError)
+      throw markProcessedError
     }
 
     return NextResponse.json({ received: true }, { status: 200 })

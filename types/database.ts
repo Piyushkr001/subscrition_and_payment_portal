@@ -292,6 +292,8 @@ export interface Database {
           user_id: string
           charity_id: string
           subscription_id: string | null
+          provider_invoice_id: string | null
+          currency: string
           amount: number
           percentage: number
           type: ContributionType
@@ -303,6 +305,8 @@ export interface Database {
           user_id: string
           charity_id: string
           subscription_id?: string | null
+          provider_invoice_id?: string | null
+          currency?: string
           amount: number
           percentage: number
           type: ContributionType
@@ -314,6 +318,8 @@ export interface Database {
           user_id?: string
           charity_id?: string
           subscription_id?: string | null
+          provider_invoice_id?: string | null
+          currency?: string
           amount?: number
           percentage?: number
           type?: ContributionType
@@ -495,6 +501,23 @@ export interface Database {
       is_admin: {
         Args: Record<PropertyKey, never>
         Returns: boolean
+      }
+      has_active_subscription: {
+        Args: {
+          check_user_id?: string
+        }
+        Returns: boolean
+      }
+      claim_stripe_webhook_event: {
+        Args: {
+          p_event_id: string
+          p_event_type: string
+        }
+        Returns: {
+          claimed: boolean
+          already_processed: boolean
+          current_status: string
+        }[]
       }
     }
     Enums: {

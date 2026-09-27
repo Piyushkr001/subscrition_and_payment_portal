@@ -321,19 +321,82 @@ WHERE email = 'user@example.com';
 | Route Group | Access Level | Description / Protection Rule |
 | :--- | :--- | :--- |
 | `/` | **Public** | Marketing landing page with pricing calculator |
-| `/charities` | **Public** | Partner charity directory |
+| `/charities` | **Public** | Partner charity directory with live Supabase search & featured causes |
+| `/charities/[slug]` | **Public** | Individual charity profile, mission overview, and nomination CTA |
 | `/draws` | **Public** | Draw mechanics & prize tiers |
 | `/login` | **Public** | Sign in (preserves billing plan and redirects to `/dashboard` or `/admin`) |
 | `/signup` | **Public** | Sign up (preserves billing plan parameter) |
 | `/dashboard/*` | **Subscriber** | Protected: unauthenticated requests redirect to `/login?redirectTo=...` |
 | `/dashboard/billing` | **Subscriber** | Dedicated billing management, plan selection, and Stripe continuation |
+| `/dashboard/charity` | **Subscriber** | Nominate partner cause & set contribution percentage (10%–100%) with live ledger |
 | `/dashboard/scores` | **Subscriber** | Score management interface (gated mutation controls for active members) |
 | `/admin/*` | **Admin** | Protected: unauthenticated requests redirect to `/login`; subscribers redirect to `/dashboard` |
+| `/admin/charities` | **Admin** | Charity governance: CRUD, status toggle, featured flag, media upload, allocation stats |
 | `/api/auth/callback` | **Public** | OAuth code exchange with safe internal redirection |
 | `/api/me` | **Authenticated** | Returns verified user identity derived from session JWT |
-| `/api/stripe/checkout` | **Authenticated** | Initiates Stripe Checkout Session with duplicate check & customer reuse |
+| `/api/stripe/checkout` | **Authenticated** | Initiates Stripe Checkout Session with race-protected customer creation |
 | `/api/stripe/portal` | **Authenticated** | Initiates Stripe Customer Portal Session for billing management |
-| `/api/webhooks/stripe` | **Public (Verified)** | Ingests Stripe webhooks, validates cryptographic signature, syncs Supabase state |
+| `/api/webhooks/stripe` | **Public (Verified)** | Atomic RPC event claiming, signature verification, subscription sync, and charity allocation |
+
+---
+
+## Charity System Architecture
+
+The ScoreKind Charity System operates on an **allocation ledger** model:
+
+```
+Subscription Payment Verified (Stripe Webhook)
+                    ↓
+  Atomic Event Claiming via RPC (claim_stripe_webhook_event)
+                    ↓
+     Subscription State Synchronized (PostgreSQL)
+                    ↓
+     Traceable Allocation Ledger Entry (charity_contributions)
+                    ↓
+   Subsequent Actual Remittance / Disbursement (Future Milestone)
+```
+
+### 1. Contribution Allocation Calculation
+- **Location**: `lib/charity/calculate-allocation.ts`
+- **Monetary Unit**: Minor integer currency units (paise/cents) to eliminate floating-point drift.
+- **Provisional Accounting Basis**: Calculated on the **gross invoice amount paid** (`invoice.amount_paid`), before processing fees or sales taxes.
+- **Bounds**: Minimum 10%, Maximum 100%, clamped and validated.
+- **Documented Fallback**: If a subscriber has paid a subscription invoice but has not yet configured a charity preference, the allocation defaults to 10% assigned to the premier featured active partner charity.
+
+### 2. Allocation Ledger Idempotency & Immutability
+- Each allocation row in `charity_contributions` stores:
+  - `user_id`: Subscriber UUID
+  - `charity_id`: Selected partner charity
+  - `subscription_id`: Associated subscription row
+  - `provider_invoice_id`: Stripe Invoice ID (protected by a unique partial index `idx_charity_contributions_invoice`)
+  - `amount`: Calculated allocation in major currency units
+  - `percentage`: Percentage applied at invoice time
+  - `currency`: ISO 4217 lowercase currency
+  - `status`: `'completed'` (denotes a confirmed allocation ledger entry, distinct from charity transfer)
+- Retried Stripe webhooks are safely ignored via the unique constraint, ensuring zero double-allocations.
+- Changes to subscriber preferences never retroactively modify earlier allocation records.
+
+### 3. Media Storage
+- Dedicated Supabase Storage bucket: `charity-media` (5MB limit, JPEG/PNG/WebP/SVG).
+- Public read access for charity logos and banners.
+- Admin-only upload, update, and delete access enforced by Storage RLS policies.
+
+---
+
+## Security Hardening Details
+
+### 1. Cross-User Privacy Guard (`has_active_subscription`)
+- **Vulnerability Addressed**: Previously, any authenticated user could pass another user's UUID to probe their subscription status.
+- **Remediation**: The PostgreSQL security-definer function now checks if `check_user_id != auth.uid()`. Unless the caller is an administrator (`public.is_admin()`) or service role, it immediately returns `FALSE`.
+- **Search Path**: Explicitly hardened with `SET search_path = public, pg_temp`.
+
+### 2. Atomic Stripe Webhook Claiming (`claim_stripe_webhook_event`)
+- **Vulnerability Addressed**: Unsafe `SELECT -> PROCESS -> UPDATE` pattern vulnerable to race conditions on concurrent webhook deliveries.
+- **Remediation**: Atomic PostgreSQL RPC function uses `INSERT ... ON CONFLICT DO NOTHING` and `SELECT ... FOR UPDATE` row locks to claim events atomically. Duplicate or concurrent deliveries are acknowledged safely without reprocessing.
+
+### 3. Stripe Customer Creation Race Protection
+- **Location**: `app/api/stripe/checkout/route.ts`
+- **Remediation**: Customer creation in Stripe is protected with `idempotencyKey: create_stripe_customer_${user.id}`. In PostgreSQL, unique constraint violations (23505) gracefully recover the winning customer ID.
 
 ---
 
@@ -342,22 +405,25 @@ WHERE email = 'user@example.com';
 All integration tests are protected against accidental production execution and require explicit opt-in:
 
 ```bash
-# 1. Targeted Stripe Billing, Idempotency & Customer Mapping Suite
+# 1. Complete Security Hardening & Charity System Test Suite
+ALLOW_DESTRUCTIVE_TESTS=true bun run scripts/test-charity-system.ts
+
+# 2. Targeted Stripe Billing, Idempotency & Customer Mapping Suite
 ALLOW_DESTRUCTIVE_TESTS=true bun run scripts/test-stripe-billing.ts
 
-# 2. Real User JWT RLS Bypass Test (verifies inactive users cannot insert/update scores directly)
+# 3. Real User JWT RLS Bypass Test (verifies inactive users cannot insert/update scores directly)
 ALLOW_DESTRUCTIVE_TESTS=true bun run scripts/test-rls-bypass.ts
 
-# 3. Comprehensive Milestone Test Suite
+# 4. Comprehensive Milestone Test Suite
 ALLOW_DESTRUCTIVE_TESTS=true bun run scripts/test-milestone.ts
 
-# 4. ESLint Verification (0 errors, 0 warnings)
+# 5. ESLint Verification
 bun run lint
 
-# 5. TypeScript Compiler Verification
+# 6. TypeScript Compiler Verification
 bunx tsc --noEmit
 
-# 6. Next.js 16 Production Build
+# 7. Next.js 16 Production Build
 bun run build
 ```
 
@@ -365,7 +431,8 @@ bun run build
 
 ## Future Development Milestones
 
-1. **Charity System**: Real charity partner CRUD, admin management, public directory search/filter, and subscriber contribution ledger.
-2. **Monthly Draw Engine**: Automated number selection, weighted draw algorithms, snapshot locking.
-3. **Winner Verification & Payouts**: Handicap certificate upload, scorecard review queue, payout settlement.
+1. **Draw Engine**: Automated monthly number draws, weighted random algorithms, immutable snapshot locking, and rollover pool management.
+2. **Winner Verification & Payouts**: Handicap certificate upload, scorecard review queue, payout settlement.
+3. **Charity Remittance Execution**: Batch payout settlement to verified charity bank accounts and quarterly audited transfer receipts.
+
 

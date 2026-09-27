@@ -88,16 +88,21 @@ export async function POST(request: Request) {
     if (customerRow?.stripe_customer_id) {
       customerId = customerRow.stripe_customer_id
     } else {
-      // Create new customer in Stripe
-      const customer = await stripe.customers.create({
-        email: user.email,
-        metadata: {
-          userId: user.id,
+      // Create new customer in Stripe with idempotency key to prevent double creation
+      const customer = await stripe.customers.create(
+        {
+          email: user.email,
+          metadata: {
+            userId: user.id,
+          },
         },
-      })
+        {
+          idempotencyKey: `create_stripe_customer_${user.id}`,
+        }
+      )
       customerId = customer.id
 
-      // Persist mapping immediately into stripe_customers
+      // Persist mapping into stripe_customers with unique conflict recovery
       const { error: persistCustomerError } = await supabaseAdmin
         .from("stripe_customers")
         .insert({
@@ -106,11 +111,26 @@ export async function POST(request: Request) {
         })
 
       if (persistCustomerError) {
-        console.error(
-          "[Stripe Checkout]: Failed to persist stripe_customer mapping for user:",
-          persistCustomerError
-        )
-        throw persistCustomerError
+        // If concurrent request won the insert race on user_id:
+        if (persistCustomerError.code === "23505") {
+          const { data: winningCustomer } = await supabaseAdmin
+            .from("stripe_customers")
+            .select("stripe_customer_id")
+            .eq("user_id", user.id)
+            .single()
+
+          if (winningCustomer?.stripe_customer_id) {
+            customerId = winningCustomer.stripe_customer_id
+          } else {
+            throw persistCustomerError
+          }
+        } else {
+          console.error(
+            "[Stripe Checkout]: Failed to persist stripe_customer mapping for user:",
+            persistCustomerError
+          )
+          throw persistCustomerError
+        }
       }
     }
 

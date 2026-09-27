@@ -71,11 +71,22 @@ export function resolvePlan(
  */
 export function extractSubscriptionPeriod(subscription: Stripe.Subscription) {
   const item = subscription.items?.data?.[0]
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rawSub = subscription as any
+  const subRecord = subscription as unknown as Record<string, unknown>
+  const itemRecord = item as unknown as Record<string, unknown> | undefined
 
-  const startTimestamp = item?.current_period_start || rawSub.current_period_start
-  const endTimestamp = item?.current_period_end || rawSub.current_period_end
+  const startTimestamp =
+    typeof itemRecord?.current_period_start === "number"
+      ? itemRecord.current_period_start
+      : typeof subRecord.current_period_start === "number"
+        ? subRecord.current_period_start
+        : undefined
+
+  const endTimestamp =
+    typeof itemRecord?.current_period_end === "number"
+      ? itemRecord.current_period_end
+      : typeof subRecord.current_period_end === "number"
+        ? subRecord.current_period_end
+        : undefined
 
   const periodStart = startTimestamp
     ? new Date(startTimestamp * 1000).toISOString()

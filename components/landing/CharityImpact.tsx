@@ -8,7 +8,7 @@ export function CharityImpact() {
   const impactTiers = [
     {
       percentage: "10%",
-      label: "Guaranteed Base",
+      label: "Committed Base",
       description: "Included standard with every single ScoreKind membership.",
       selected: false,
     },
@@ -55,9 +55,9 @@ export function CharityImpact() {
 
             <p className="mt-5 text-base leading-relaxed text-muted-foreground sm:text-lg">
               Charity is not an afterthought at ScoreKind — it is built directly into
-              the foundation. At least 10% of your membership fee is channeled
-              directly to a registered cause you choose. You can also voluntarily
-              increase your contribution or support partners with standalone gifts.
+              the foundation. At least 10% of your membership fee is allocated
+              to a registered cause you choose. You can also voluntarily
+              increase your contribution percentage directly in your dashboard.
             </p>
 
             <div className="mt-8 flex flex-col gap-3.5">
@@ -70,13 +70,13 @@ export function CharityImpact() {
               <div className="flex items-center gap-3">
                 <CheckCircle2 className="size-5 text-teal-600 dark:text-teal-400 shrink-0" />
                 <span className="text-sm sm:text-base text-foreground font-medium">
-                  Guaranteed minimum 10% allocation with flexible percentage scaling
+                  Committed minimum 10% allocation with flexible percentage scaling
                 </span>
               </div>
               <div className="flex items-center gap-3">
                 <CheckCircle2 className="size-5 text-teal-600 dark:text-teal-400 shrink-0" />
                 <span className="text-sm sm:text-base text-foreground font-medium">
-                  Full quarterly remittance statements and transparent impact metrics
+                  Transparent allocation ledger and partner cause reporting
                 </span>
               </div>
             </div>
